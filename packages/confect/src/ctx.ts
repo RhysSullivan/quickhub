@@ -12,12 +12,12 @@ import type {
 	Expression,
 	FilterBuilder,
 	IndexRange,
-	IndexRangeBuilder,
 	SearchFilter,
 	GenericDataModel,
 	GenericDocument,
 	GenericTableInfo,
 	WithoutSystemFields,
+	Scheduler,
 } from "convex/server";
 import type { GenericId, Value } from "convex/values";
 import * as Chunk from "effect/Chunk";
@@ -43,11 +43,21 @@ export type {
 };
 
 /**
- * A loosely-typed index range builder that allows calling `.eq`, `.gt`, `.gte`, `.lt`, `.lte`
- * with string field names and values. This is the type exposed to Confect consumers since
+ * A loosely-typed index range builder that allows chaining `.eq`, `.gt`, `.gte`, `.lt`, `.lte`
+ * with string field names and `Value` values. This is the type exposed to Confect consumers since
  * Confect erases table-specific index type information.
+ *
+ * Unlike `IndexRangeBuilder<GenericDocument, string[], number>` (where `.eq()` resolves to plain
+ * `IndexRange` due to tuple-length arithmetic on `string[]`), this interface is self-referential:
+ * `.eq()` always returns `LooseIndexRangeBuilder`, allowing multi-field `.eq().eq()` chains.
  */
-export type LooseIndexRangeBuilder = IndexRangeBuilder<GenericDocument, string[], number>;
+export interface LooseIndexRangeBuilder extends IndexRange {
+	eq(fieldName: string, value: Value): LooseIndexRangeBuilder;
+	gt(fieldName: string, value: Value): LooseIndexRangeBuilder;
+	gte(fieldName: string, value: Value): LooseIndexRangeBuilder;
+	lt(fieldName: string, value: Value): IndexRange;
+	lte(fieldName: string, value: Value): IndexRange;
+}
 
 type TableSchemas<Tables extends GenericConfectSchema> = {
 	[TableName in TableNamesInSchema<Tables>]: Schema.Schema<
@@ -504,6 +514,9 @@ export interface ConfectMutationCtx<Tables extends GenericConfectSchema> {
 		...args: OptionalRestArgs<Mutation>
 	): Effect.Effect<FunctionReturnType<Mutation>>;
 
+	/** Raw Convex scheduler for scheduling functions from mutations. */
+	scheduler: Scheduler;
+
 	db: ConfectDatabaseWriter<Tables>;
 	auth: ConfectAuth;
 }
@@ -560,6 +573,7 @@ export const makeMutationCtx = <Tables extends GenericConfectSchema>(
 		mutation: Mutation,
 		...args: OptionalRestArgs<Mutation>
 	) => Effect.promise(() => ctx.runMutation(mutation, ...args)),
+	scheduler: ctx.scheduler,
 	db: new ConfectDatabaseWriterImpl(ctx.db, tableSchemas),
 	auth: new ConfectAuthImpl(ctx.auth),
 });

@@ -597,3 +597,65 @@ Blockers/Risks:
     Confect's schemaToValidator correctly converts Schema.Array to v.array() at runtime.
   - LSP still shows phantom errors on deleted files (stale cache). bun typecheck is source of truth.
 ```
+
+### Session: 2026-02-18 (continued)
+
+```
+Timestamp: 2026-02-18T11:00
+Branch: main
+Completed:
+  - Slice 2 complete and committed (47a6c7f)
+  - Webhook HTTP endpoint at /api/github/webhook
+  - HMAC-SHA256 signature verification (Web Crypto, timing-safe comparison)
+  - webhookIngestion.ts: internalMutation storeRawEvent with deliveryId dedup
+  - webhookVerify.ts: Effect-based signature verification with tagged errors
+  - Fixed Confect: withIndex callback now typed as LooseIndexRangeBuilder (not unknown)
+  - Exported LooseIndexRangeBuilder from @packages/confect and @packages/confect/ctx
+  - Confect tests pass (124/124), full typecheck passes (5/5)
+  - Updated PLAN.md: autonomy rules for self-editing plan and updating Confect directly
+  - Added biome override for http.ts (needs _generated/server import for httpAction)
+In Progress:
+  - Slice 3: Repository connect flow + bootstrap backfill
+Next Step:
+  - Build connectRepo admin mutation (creates installation + repo records, enqueues bootstrap job)
+  - Build bootstrap backfill action (fetches repo metadata, branches, PRs, issues via gh api)
+  - Test with RhysSullivan/quickhub-test repo
+Next Command:
+  - Create packages/database/convex/rpc/repoConnect.ts
+Blockers/Risks:
+  - _generated/api.d.ts is stale (doesn't include webhookIngestion yet). Will be fixed on next
+    Convex codegen/dev/deploy. Does not block typecheck.
+  - Need to decide: use `gh api` via Convex action (requires Node runtime) or direct fetch with PAT.
+    Leaning toward direct fetch since it's simpler and doesn't require gh CLI on the server.
+```
+
+### Session: 2026-02-18 (third)
+
+```
+Timestamp: 2026-02-18T11:10
+Branch: main
+Completed:
+  - Slice 3 code complete (not yet deployed/tested end-to-end)
+  - shared/githubApi.ts: GitHubApiClient Effect service with `use` pattern, Data.TaggedError, Layer.effect Default
+  - rpc/repoConnect.ts: connectRepo public mutation — creates installation, repo, sync job, schedules bootstrap
+  - rpc/bootstrapWrite.ts: 5 internal mutations — upsertBranches, upsertPullRequests, upsertIssues, upsertUsers, updateSyncJobState
+  - rpc/repoBootstrap.ts: bootstrapRepo internal action — paginated fetch of branches/PRs/issues via GitHub REST API, user collection, batched writes (50/batch)
+  - http.ts: rewritten as pure Effect pipeline with tagged errors (MissingHeaders, MissingSecret, InvalidPayload) and Effect.catchTags
+  - Confect: added `scheduler: Scheduler` to ConfectMutationCtx interface and makeMutationCtx
+  - Confect: fixed LooseIndexRangeBuilder — changed from type alias to self-referential interface extending IndexRange, so .eq().eq() chains work
+  - Confect tests pass (124/124), full typecheck passes (5/5 packages, 0 errors)
+In Progress:
+  - Need to deploy to Convex to regenerate _generated/api.d.ts
+  - Need to test connectRepo + bootstrapRepo end-to-end with RhysSullivan/quickhub-test
+Next Step:
+  - Deploy to Convex (bunx convex deploy from packages/database)
+  - Call connectRepo manually with quickhub-test repo metadata
+  - Verify bootstrap action runs and populates domain tables
+  - Create repo-level webhook on quickhub-test via gh api
+  - Begin Slice 4: webhook handlers for PR/issue/comment events
+Next Command:
+  - bunx convex deploy (from packages/database)
+Blockers/Risks:
+  - GITHUB_PAT must be set as Convex environment variable for bootstrap action to work (it reads process.env.GITHUB_PAT in action runtime)
+  - _generated/api.d.ts still stale until deploy/codegen
+```
