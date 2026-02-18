@@ -785,3 +785,32 @@ Blockers/Risks:
   - No convex-test integration tests yet (all validation has been E2E against live Convex)
   - LSP phantom errors persist
 ```
+
+### Session 8 — 2026-02-18: Slice 7 UI + activity feed wiring
+
+```
+Completed:
+  - Slice 7 UI COMMITTED (23ef354):
+    - Home page: repo list with overview cards (open PR/issue counts, failing checks, relative timestamps)
+    - Repo detail page: owner/name route with tabbed view (Pull Requests, Issues, Activity)
+    - PR list: state icons (open/closed/draft), check badges, author avatars, branch names, review/comment counts
+    - Issue list: state icons, labels, author avatars, comment counts
+    - Activity feed: activity type badges, actor avatars, descriptions, relative timestamps
+    - projection-queries RPC client using createRpcModuleClientContext pattern
+    - Stripped BetterAuth from convex-client-provider (RegistryProvider only)
+  - Activity feed wiring COMPLETE:
+    - appendActivityFeedEntry now called from webhookProcessor after every successful event dispatch
+    - extractActivityInfo helper uses Effect Match to generate activity type, title, description, actor info
+    - Covers: issues.*, pr.*, issue_comment.*, push, pr_review.*, check_run.completed, branch.created, branch.deleted
+    - Deployed to Convex production
+  - Typecheck: 0 errors across all 5 packages
+In Progress:
+  - Nothing
+Next Step:
+  - Live test the UI (start Next.js dev server, verify pages render with real Convex data)
+  - Write convex-test integration tests for webhook processing, projection correctness, idempotency
+Blockers/Risks:
+  - UI not yet live-tested (pages created and typecheck passes, but no visual confirmation)
+  - No convex-test integration tests yet
+  - LSP phantom errors persist
+```
