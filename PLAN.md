@@ -524,6 +524,8 @@ Implement in this sequence:
 5. Commit/branch/check-run sync (webhook handlers + backfill).
 6. Projection builders (view tables updated on domain table writes).
 7. UI pages wired to projections (public, no auth).
+   - Use `@pierre/diffs` (`bun i @pierre/diffs`) for rendering diffs in PR views.
+   - Frontend should be buildable through tests first — projection queries validated via `@packages/convex-test` before wiring UI components.
 8. Replay/reconcile/dead-letter operations.
 
 ## Definition of Done
@@ -688,4 +690,33 @@ Blockers/Risks:
   - Webhook events are stored raw but not processed yet — Slice 4 handles this
   - quickhub-test webhook id: 596888336
   - gh OAuth token used as GITHUB_PAT (has repo scope, sufficient for all operations)
+```
+
+### Session 5 — 2026-02-18: Confect define/implement split + circular dep fix (commit b821147)
+
+```
+Completed:
+  - RESOLVED: Circular type dependency between api.d.ts and Confect RPC modules
+  - Confect library rewritten: factory methods now take schemas only, return UnbuiltRpcEndpoint with .implement()
+  - Fixed AnyUnbuiltEndpoint variance bug: implement handler payload must be `unknown` (double contravariance = covariant)
+  - Converted ALL RPC modules to new define/implement API:
+    - admin.ts (3 queries)
+    - webhookIngestion.ts (1 internal mutation)
+    - bootstrapWrite.ts (5 internal mutations)
+    - repoConnect.ts (1 mutation)
+    - webhookProcessor.ts (2 internal mutations) — NEW, Slice 4 partial
+  - Split repoBootstrap.ts into definition-only + repoBootstrapImpl.ts (implementation)
+  - GitHubApiError promoted to defect via Effect.orDie in bootstrap action
+  - Typecheck: 0 errors
+  - Confect tests: 124 pass
+  - Deployed successfully via convex dev --once
+In Progress:
+  - Slice 4: webhookProcessor.ts created but untested
+Next Step:
+  - Test webhookProcessor by processing the 7 stored webhook events
+  - Wire webhook processing trigger (cron or post-ingestion scheduler)
+  - E2E validate webhook→process→normalized tables pipeline
+  - Then proceed to Slice 5 (commit/branch/check-run sync)
+Blockers/Risks:
+  - LSP shows phantom errors on deleted files (guestbook.ts, benchmark.ts, betterAuth.ts) — bun typecheck is source of truth
 ```
