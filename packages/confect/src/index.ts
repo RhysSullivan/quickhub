@@ -31,6 +31,7 @@ export {
 	type ConfectDatabaseReader,
 	type ConfectDatabaseWriter,
 	type ConfectAuth,
+	type LooseIndexRangeBuilder,
 } from "./ctx";
 
 export { ConvexClient, ConvexClientLayer, type ConvexClientService } from "./client";

@@ -12,8 +12,10 @@ import type {
 	Expression,
 	FilterBuilder,
 	IndexRange,
+	IndexRangeBuilder,
 	SearchFilter,
 	GenericDataModel,
+	GenericDocument,
 	GenericTableInfo,
 	WithoutSystemFields,
 } from "convex/server";
@@ -39,6 +41,13 @@ export type {
 	DocumentFromTable,
 	EncodedDocumentFromTable,
 };
+
+/**
+ * A loosely-typed index range builder that allows calling `.eq`, `.gt`, `.gte`, `.lt`, `.lte`
+ * with string field names and values. This is the type exposed to Confect consumers since
+ * Confect erases table-specific index type information.
+ */
+export type LooseIndexRangeBuilder = IndexRangeBuilder<GenericDocument, string[], number>;
 
 type TableSchemas<Tables extends GenericConfectSchema> = {
 	[TableName in TableNamesInSchema<Tables>]: Schema.Schema<
@@ -91,7 +100,7 @@ interface QueryLike {
 
 interface QueryInitializerLike extends QueryLike {
 	fullTableScan(): QueryLike;
-	withIndex(indexName: string, indexRange?: (q: unknown) => IndexRange): QueryLike;
+	withIndex(indexName: string, indexRange?: (q: LooseIndexRangeBuilder) => IndexRange): QueryLike;
 	withSearchIndex(indexName: string, searchFilter: (q: unknown) => SearchFilter): QueryLike;
 }
 
@@ -195,7 +204,7 @@ interface ConfectQueryInitializer<
 
 	withIndex<IndexName extends string>(
 		indexName: IndexName,
-		indexRange?: (q: unknown) => IndexRange,
+		indexRange?: (q: LooseIndexRangeBuilder) => IndexRange,
 	): ConfectQuery<Tables, TableName>;
 
 	withSearchIndex<IndexName extends string>(
@@ -228,7 +237,7 @@ class ConfectQueryInitializerImpl<
 
 	withIndex<IndexName extends string>(
 		indexName: IndexName,
-		indexRange?: (q: unknown) => IndexRange,
+		indexRange?: (q: LooseIndexRangeBuilder) => IndexRange,
 	): ConfectQuery<Tables, TableName> {
 		return new ConfectQueryImpl(
 			this.q.withIndex(indexName, indexRange),

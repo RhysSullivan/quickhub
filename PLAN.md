@@ -71,7 +71,8 @@ The test repo should be treated as disposable — it can be deleted and recreate
 5. Prefer idempotent and replay-safe behavior over shortcuts.
 6. Assume webhook events can be delayed, duplicated, or out-of-order.
 7. Keep the repo in a runnable state after each slice.
-8. This plan is a guide, not a prison; if a better path appears, take it and update this file with the rationale.
+8. **This plan is a living document.** Update it autonomously whenever you discover better approaches, resolve ambiguities, or learn something that future sessions need to know. Don't ask permission to edit this file — just do it and note what changed in the status notes. The goal is for this file to always reflect the current best understanding of the project.
+9. **No workarounds or hackery.** If a library or internal package doesn't support what you need, fix the library. Specifically: if Confect doesn't expose proper types, update `packages/confect/src/`. If Effect patterns need a utility, add it. The codebase should be clean and correct, not held together with adapter shims.
 
 ## Repeated Prompt / Resume Protocol (Important)
 
@@ -478,6 +479,17 @@ Use Confect as the application-level contract between Convex handlers and client
 - Keep middleware explicit (auth, telemetry, request policies).
 - Use Effect layers for GitHub clients and sync services; consume with `yield*` dependencies.
 
+### Confect is ours — update it when needed
+
+`packages/confect/` is a first-party package in this monorepo. If Confect doesn't expose the right types, has missing APIs, or has ergonomic gaps — **fix Confect directly**. Do not create workaround utilities, adapter files, or `as` casts to paper over Confect's limitations.
+
+Examples of when to update Confect:
+- If `withIndex` typed its callback parameter as `unknown`, fix `ctx.ts` to expose proper `LooseIndexRangeBuilder` types.
+- If `ConfectQueryInitializer` doesn't support a Convex feature you need (e.g. `.filter()` with typed builders), add it.
+- If the schema definition doesn't handle a Convex validator pattern, extend `schema.ts` or `validators.ts`.
+
+After updating Confect, make sure existing tests still pass (`bun run test` from `packages/confect/`).
+
 ## Testing Requirements
 
 Testing must include Convex-test-based validation.
@@ -550,4 +562,38 @@ In Progress:
 Next Step:
 Next Command:
 Blockers/Risks:
+```
+
+### Session: 2026-02-18
+
+```
+Timestamp: 2026-02-18
+Branch: main
+Completed:
+  - Slice 0 fully complete and committed (5f19e4c)
+  - Deleted all starter domain code (guestbook, benchmark, admin tests)
+  - Deleted discord-bot app and reacord package entirely
+  - Deleted betterAuth Convex component, auth.config.ts, shared/betterAuth.ts
+  - Deleted old UI demos and RPC files
+  - Stripped betterAuth from convex.config.ts and http.ts
+  - Added 18-table GitHub mirror schema in schema.ts
+  - Rewrote admin.ts with healthCheck query
+  - Updated main-site with QuickHub placeholder
+  - Cleaned tsconfig.json, knip.json, biome.json of stale references
+  - bun typecheck passes (5/5 packages)
+  - GITHUB_WEBHOOK_SECRET generated and in .env
+  - Test repo RhysSullivan/quickhub-test exists on GitHub
+In Progress:
+  - Slice 1 schema validation (need to run Convex codegen to confirm schema compiles)
+Next Step:
+  - Run Convex codegen to validate the 18-table schema
+  - Build Slice 2: Webhook HTTP endpoint with HMAC-SHA256 signature verification
+  - Build Slice 3: Repository connect flow + bootstrap backfill
+Next Command:
+  - bunx convex dev (from packages/database) to validate schema
+Blockers/Risks:
+  - Schema.Array produces readonly T[] which conflicts with Convex GenericDataModel mutable Value[].
+    This only matters for generic type constraints (betterAuth shared module, now deleted).
+    Confect's schemaToValidator correctly converts Schema.Array to v.array() at runtime.
+  - LSP still shows phantom errors on deleted files (stale cache). bun typecheck is source of truth.
 ```

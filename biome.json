@@ -92,7 +92,10 @@
 			}
 		},
 		{
-			"includes": ["packages/database/convex/client/**"],
+			"includes": [
+				"packages/database/convex/client/**",
+				"packages/database/convex/http.ts"
+			],
 			"linter": {
 				"rules": {
 					"style": {
