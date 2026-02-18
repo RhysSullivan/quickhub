@@ -1,0 +1,28 @@
+{
+	"name": "@packages/reacord",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsgo --noEmit"
+	},
+	"dependencies": {
+		"@effect-atom/atom": "^0.4.11",
+		"@effect-atom/atom-react": "^0.4.4",
+		"react": "catalog:",
+		"react-reconciler": "^0.31.0"
+	},
+	"devDependencies": {
+		"@types/react": "catalog:",
+		"@types/react-reconciler": "^0.31.0"
+	},
+	"peerDependencies": {
+		"@effect/experimental": "^0.57.0",
+		"@effect/platform": "catalog:",
+		"discord.js": "^14",
+		"effect": "catalog:"
+	}
+}

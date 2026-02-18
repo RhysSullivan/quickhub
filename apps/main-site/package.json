@@ -1,0 +1,51 @@
+{
+	"name": "@packages/main-site",
+	"version": "0.1.0",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"with-env": "bun run --env-file=../../.env --",
+		"with-env:prod": "bun run --env-file=../../.env.production --",
+		"dev": "NODE_ENV=development bun with-env next dev --turbo ${REMOTE_DEV:+-H 0.0.0.0} --port 4001",
+		"dev:prod": "NODE_ENV=development bun with-env:prod next dev --turbo --port 4001",
+		"build": "bun with-env next build",
+		"start": "bun with-env next start",
+		"typecheck": "tsgo --noEmit",
+		"typecheck:slow": "tsc --noEmit",
+		"test": "vitest run --passWithNoTests --pool=forks",
+		"clean": "rm -rf node_modules .next"
+	},
+	"dependencies": {
+		"@convex-dev/better-auth": "catalog:",
+		"@effect-atom/atom": "catalog:",
+		"@effect-atom/atom-react": "catalog:",
+		"@packages/confect": "workspace:*",
+		"@packages/database": "workspace:*",
+		"@packages/react": "workspace:*",
+		"@packages/ui": "workspace:*",
+		"effect": "catalog:",
+		"@sentry/nextjs": "^9",
+		"@vercel/speed-insights": "^1.3.1",
+		"@vercel/toolbar": "^0.1.41",
+		"babel-plugin-react-compiler": "^19.1.0-rc.2",
+		"better-auth": "catalog:",
+		"convex": "catalog:",
+		"next": "catalog:",
+		"nuqs": "catalog:",
+		"react": "catalog:",
+		"react-dom": "catalog:"
+	},
+	"devDependencies": {
+		"@packages/convex-test": "workspace:*",
+		"@packages/typescript-config": "workspace:*",
+		"@testing-library/dom": "^10.4.1",
+		"@testing-library/react": "^16.3.0",
+		"@tailwindcss/postcss": "catalog:",
+		"@types/node": "catalog:",
+		"@types/react": "catalog:",
+		"@types/react-dom": "catalog:",
+		"happy-dom": "^20.0.10",
+		"postcss": "catalog:",
+		"vitest": "catalog:"
+	}
+}

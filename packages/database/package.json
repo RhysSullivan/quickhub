@@ -1,0 +1,49 @@
+{
+	"name": "@packages/database",
+	"version": "1.0.0",
+	"exports": {
+		"./testing": "./testing.ts",
+		"./convex/shared/*": "./convex/shared/*.ts",
+		"./convex/rpc/*": "./convex/rpc/*.ts",
+		"./convex/*": {
+			"types": "./convex/*.d.ts",
+			"default": "./convex/*.js"
+		}
+	},
+	"scripts": {
+		"with-env": "bun run --env-file=../../.env",
+		"with-env:prod": "bun run --env-file=../../.env.production",
+		"deploy": "bun run with-env:prod convex deploy",
+		"codegen": "bunx convex codegen",
+		"generate:auth-schema": "cd convex/betterAuth && bunx @better-auth/cli generate -y --output generatedSchema.ts",
+		"dev": "bun convex dev",
+		"typecheck": "tsgo -p convex/tsconfig.json --noEmit & tsgo -p tsconfig.json --noEmit & wait",
+		"typecheck:slow": "tsc -p convex/tsconfig.json --noEmit & tsc -p tsconfig.json --noEmit & wait",
+		"clean": "rm -rf node_modules .turbo",
+		"test": "vitest run --no-watch --pool=forks",
+		"test:watch": "vitest",
+
+		"convex:knip": "bun scripts/find-unused-convex-functions.ts",
+		"env:sync:prod": "bun run scripts/sync-env-prod.ts"
+	},
+	"dependencies": {
+		"@convex-dev/action-cache": "^0.3.0",
+		"@convex-dev/better-auth": "catalog:",
+		"@convex-dev/migrations": "^0.3.1",
+		"@convex-dev/rate-limiter": "^0.3.2",
+		"@packages/confect": "workspace:*",
+		"@packages/observability": "workspace:*",
+		"better-auth": "catalog:",
+		"convex": "catalog:",
+		"convex-helpers": "^0.1.104",
+		"effect": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@edge-runtime/vm": "catalog:",
+		"@effect/vitest": "^0.27.0",
+		"@packages/convex-test": "workspace:*",
+		"@types/node": "catalog:",
+		"vitest": "catalog:"
+	}
+}

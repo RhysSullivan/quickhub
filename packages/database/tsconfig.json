@@ -1,0 +1,17 @@
+{
+	"extends": "../typescript-config/base.json",
+	"compilerOptions": {
+		"outDir": "./dist",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"rootDir": ".",
+		"types": ["node"]
+	},
+	"include": ["src/**/*", "convex/**/*"],
+	"exclude": [
+		"node_modules",
+		"dist",
+		"convex/_generated",
+		"src/generated/function-types.ts"
+	]
+}

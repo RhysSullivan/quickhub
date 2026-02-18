@@ -1,0 +1,144 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.1.4/schema.json",
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"files": {
+		"includes": [
+			"**",
+			"!**/convex/_generated/**",
+			"!**/convex/betterAuth/_generated/**",
+			"!**/*.css",
+			"!.context/**",
+			"!**/.context/**",
+			"!packages/convex-test/**",
+			"!packages/confect/**",
+			"!packages/discord-api/src/generated.ts",
+			"!packages/github-api/src/generated.ts",
+			"!packages/database/src/generated/function-types.ts",
+			"!packages/agent/**"
+		]
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab"
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true,
+			"performance": {
+				"noImgElement": "off"
+			},
+			"a11y": "off",
+			"suspicious": {
+				"noShadowRestrictedNames": "error",
+				"noExplicitAny": "error",
+				"noArrayIndexKey": "off"
+			},
+			"style": {
+				"noNonNullAssertion": "off",
+				"noRestrictedImports": {
+					"level": "error",
+					"options": {
+						"paths": {
+							"../../../../packages/database/convex/_generated/api": "Do not use relative paths across packages. Use '@packages/database/convex/_generated/api' instead.",
+							"../../../../../packages/database/convex/_generated/api": "Do not use relative paths across packages. Use '@packages/database/convex/_generated/api' instead.",
+							"convex/react": {
+								"importNames": ["useConvexAuth"],
+								"message": "Do not use 'useConvexAuth'. Use the appropriate alternative authentication hook instead."
+							}
+						}
+					}
+				}
+			}
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["packages/ui/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "error",
+							"options": {
+								"paths": {
+									"@packages/ui": "Do not import from '@packages/ui' within the 'ui/' package. Use relative imports instead."
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		{
+			"includes": ["packages/database/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "error",
+							"options": {
+								"paths": {
+									"@packages/database": "Do not import from '@packages/database' within the 'database/' package. Use relative imports instead.",
+									"../_generated/server": "Do not import from '_generated/server' directly. Use '../client' instead for server types and functions (ActionCtx, MutationCtx, QueryCtx, internalQuery, internalMutation, internalAction, httpAction).",
+									"./_generated/server": "Do not import from '_generated/server' directly. Use './client' instead for server types and functions (ActionCtx, MutationCtx, QueryCtx, internalQuery, internalMutation, internalAction, httpAction)."
+								}
+							}
+						}
+					}
+				}
+			}
+		},
+		{
+			"includes": ["packages/database/convex/client/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "off"
+						}
+					}
+				}
+			}
+		},
+		{
+			"includes": ["packages/database/convex/agent/**"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noRestrictedImports": {
+							"level": "off"
+						}
+					}
+				}
+			}
+		},
+		{
+			"includes": ["**/*.test.ts", "**/*.test.tsx"],
+			"linter": {
+				"rules": {
+					"style": {
+						"noNonNullAssertion": "off"
+					}
+				}
+			}
+		}
+	],
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
+	"assist": {
+		"enabled": true,
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	}
+}

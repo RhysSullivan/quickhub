@@ -1,0 +1,21 @@
+{
+	"$schema": "https://unpkg.com/knip@latest/schema.json",
+	"ignore": [
+		".context/**",
+		"packages/ui/src/components/**",
+		"packages/convex-test/**",
+		"**/_generated/**",
+		"packages/ui/src/styles/globals.css",
+		"packages/database/convex/public/**",
+		"packages/database/convex/private/**",
+		"packages/database/convex/betterAuth/**",
+		"packages/reacord/**",
+		"packages/confect/**"
+	],
+	"ignoreBinaries": ["wait", "vercel"],
+	"workspaces": {
+		"packages/database": {
+			"ignore": ["convex/**/*.d.js"]
+		}
+	}
+}

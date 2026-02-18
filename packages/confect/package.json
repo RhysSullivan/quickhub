@@ -1,0 +1,33 @@
+{
+	"name": "@packages/confect",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts",
+		"./schema": "./src/schema.ts",
+		"./validators": "./src/validators.ts",
+		"./ctx": "./src/ctx.ts",
+		"./client": "./src/client.ts",
+		"./rpc": "./src/rpc/index.ts",
+		"./testing": "./src/testing.ts"
+	},
+	"scripts": {
+		"test": "vitest run --no-watch",
+		"test:watch": "vitest"
+	},
+	"dependencies": {
+		"@effect/platform": "catalog:",
+		"@effect/rpc": "catalog:",
+		"@effect-atom/atom": "catalog:",
+		"@effect-atom/atom-react": "catalog:",
+		"convex": "catalog:",
+		"effect": "catalog:"
+	},
+	"devDependencies": {
+		"@effect/vitest": "catalog:",
+		"@types/node": "catalog:",
+		"typescript": "catalog:",
+		"vitest": "catalog:"
+	}
+}

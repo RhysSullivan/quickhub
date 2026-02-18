@@ -1,0 +1,9 @@
+{
+	"extends": "@packages/typescript-config/react-library.json",
+	"compilerOptions": {
+		"outDir": "dist",
+		"rootDir": "src",
+		"moduleResolution": "bundler"
+	},
+	"include": ["src"]
+}
