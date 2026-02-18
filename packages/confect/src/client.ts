@@ -44,72 +44,49 @@ export const ConvexClientLayer = (
 ): Layer.Layer<ConvexClient> => {
 	const wsClient = new ConvexClientImpl(url);
 
-	const callHttpWithMetadata = <A>(
-		requestMetadata: ConvexRequestMetadata | undefined,
-		run: (httpClient: ConvexHttpClient) => Promise<A>,
-	): Promise<A> => {
-		const baseFetch = globalThis.fetch;
-		const fetchWithHeaders: typeof globalThis.fetch = (input, init) => {
-			const mergedHeaders = new Headers(init?.headers);
-			if (requestMetadata?.headers !== undefined) {
-				for (const [headerName, headerValue] of Object.entries(
-					requestMetadata.headers,
-				)) {
-					mergedHeaders.set(headerName, headerValue);
-				}
-			}
+	// Shared HTTP client instance — no custom headers that would trigger CORS
+	// preflight failures in browsers. Telemetry context is already embedded
+	// in the payload by `withOptionalRpcTelemetryContext`, so transport-level
+	// headers are not needed for browser clients.
+	const httpClient = new ConvexHttpClient(url);
 
-			return baseFetch(input, {
-				...init,
-				headers: mergedHeaders,
-			});
-		};
-
-		const httpClient = new ConvexHttpClient(url, {
-			fetch: fetchWithHeaders,
-		});
-
+	const syncAuth = () => {
 		const auth = wsClient.getAuth();
 		if (auth !== undefined) {
 			httpClient.setAuth(auth.token);
 		}
-
-		return run(httpClient);
 	};
 
 	const service: ConvexClientService = {
 		query: <Query extends FunctionReference<"query">>(
 			query: Query,
 			args: Query["_args"],
-			requestMetadata?: ConvexRequestMetadata,
+			_requestMetadata?: ConvexRequestMetadata,
 		): Effect.Effect<FunctionReturnType<Query>> =>
-			Effect.promise(() =>
-				callHttpWithMetadata(requestMetadata, (httpClient) =>
-					httpClient.query(query, args),
-				),
-			),
+			Effect.promise(() => {
+				syncAuth();
+				return httpClient.query(query, args);
+			}),
 
 		mutation: <Mutation extends FunctionReference<"mutation">>(
 			mutation: Mutation,
 			args: Mutation["_args"],
-			requestMetadata?: ConvexRequestMetadata,
+			_requestMetadata?: ConvexRequestMetadata,
 		): Effect.Effect<FunctionReturnType<Mutation>> =>
-			Effect.promise(() =>
-				callHttpWithMetadata(requestMetadata, (httpClient) =>
-					httpClient.mutation(mutation, args),
-				),
-			),
+			Effect.promise(() => {
+				syncAuth();
+				return httpClient.mutation(mutation, args);
+			}),
 
 		action: <Action extends FunctionReference<"action">>(
 			action: Action,
 			args: Action["_args"],
-			requestMetadata?: ConvexRequestMetadata,
+			_requestMetadata?: ConvexRequestMetadata,
 		): Effect.Effect<FunctionReturnType<Action>> =>
-			Effect.promise(() =>
-				callHttpWithMetadata(requestMetadata, (httpClient) =>
-					httpClient.action(action, args),
-				),
-			),
+			Effect.promise(() => {
+				syncAuth();
+				return httpClient.action(action, args);
+			}),
 
 		subscribe: <Query extends FunctionReference<"query">>(
 			query: Query,

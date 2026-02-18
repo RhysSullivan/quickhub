@@ -12,10 +12,16 @@ import { Link } from "@packages/ui/components/link";
 import { Skeleton } from "@packages/ui/components/skeleton";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Option } from "effect";
+import { useMemo } from "react";
+
+const EmptyPayload: Record<string, never> = {};
 
 export default function HomePage() {
 	const client = useProjectionQueries();
-	const reposAtom = client.listRepos.subscription({});
+	const reposAtom = useMemo(
+		() => client.listRepos.subscription(EmptyPayload),
+		[client],
+	);
 	const reposResult = useAtomValue(reposAtom);
 
 	return (
@@ -30,7 +36,13 @@ export default function HomePage() {
 			{Result.isInitial(reposResult) && <RepoListSkeleton />}
 
 			{Result.isFailure(reposResult) && (
-				<p className="text-destructive">Failed to load repositories.</p>
+				<p className="text-destructive">
+					Failed to load repositories.
+					<br />
+					<code className="text-xs">
+						{JSON.stringify(Option.getOrNull(Result.error(reposResult)))}
+					</code>
+				</p>
 			)}
 
 			{(() => {
