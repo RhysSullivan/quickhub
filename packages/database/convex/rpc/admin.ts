@@ -1,5 +1,5 @@
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { ConfectMutationCtx, ConfectQueryCtx, confectSchema } from "../confect";
 import {
 	checkRunsByRepo,
@@ -386,6 +386,39 @@ systemStatusDef.implement(() =>
 	}),
 );
 
+/**
+ * Backfill `connectedByUserId` on a repo that was inserted before
+ * the migration (or where the field was incorrectly null).
+ */
+const patchRepoConnectedUserDef = factory.internalMutation({
+	payload: {
+		githubRepoId: Schema.Number,
+		connectedByUserId: Schema.String,
+	},
+	success: Schema.Boolean,
+});
+
+patchRepoConnectedUserDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectMutationCtx;
+		const repo = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_githubRepoId", (q) =>
+				q.eq("githubRepoId", args.githubRepoId),
+			)
+			.first();
+
+		if (Option.isNone(repo)) {
+			return false;
+		}
+
+		yield* ctx.db.patch(repo.value._id, {
+			connectedByUserId: args.connectedByUserId,
+		});
+		return true;
+	}),
+);
+
 // ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
@@ -398,6 +431,7 @@ const adminModule = makeRpcModule(
 		repairProjections: repairProjectionsDef,
 		queueHealth: queueHealthDef,
 		systemStatus: systemStatusDef,
+		patchRepoConnectedUser: patchRepoConnectedUserDef,
 	},
 	{ middlewares: DatabaseRpcTelemetryLayer },
 );
@@ -409,6 +443,7 @@ export const {
 	repairProjections,
 	queueHealth,
 	systemStatus,
+	patchRepoConnectedUser,
 } = adminModule.handlers;
 export { adminModule };
 export type AdminModule = typeof adminModule;
