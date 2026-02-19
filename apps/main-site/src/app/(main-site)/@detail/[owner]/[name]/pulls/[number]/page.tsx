@@ -1,26 +1,33 @@
-import { serverQueries } from "@/lib/server-queries";
+import { Suspense } from "react";
+import {
+	cachedGetPullRequestDetail,
+	cachedListPrFiles,
+} from "@/lib/server-queries";
+import { DetailSkeleton } from "../../../../../_components/skeletons";
 import { PrDetailClient } from "./pr-detail-client";
 
-export default async function PrDetailSlot(props: {
+export default function PrDetailSlot(props: {
 	params: Promise<{ owner: string; name: string; number: string }>;
 }) {
-	const params = await props.params;
+	return (
+		<Suspense fallback={<DetailSkeleton />}>
+			<PrDetailCached paramsPromise={props.params} />
+		</Suspense>
+	);
+}
+
+async function PrDetailCached({
+	paramsPromise,
+}: {
+	paramsPromise: Promise<{ owner: string; name: string; number: string }>;
+}) {
+	const params = await paramsPromise;
 	const { owner, name } = params;
 	const num = Number.parseInt(params.number, 10);
 
-	// Await both in parallel — no Suspense so the server fully renders before
-	// sending the response. Next.js keeps the previous detail visible until ready.
 	const [initialPr, initialFiles] = await Promise.all([
-		serverQueries.getPullRequestDetail.queryPromise({
-			ownerLogin: owner,
-			name,
-			number: num,
-		}),
-		serverQueries.listPrFiles.queryPromise({
-			ownerLogin: owner,
-			name,
-			number: num,
-		}),
+		cachedGetPullRequestDetail(owner, name, num),
+		cachedListPrFiles(owner, name, num),
 	]);
 
 	return (

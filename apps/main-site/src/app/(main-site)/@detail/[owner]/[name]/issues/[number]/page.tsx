@@ -1,18 +1,28 @@
-import { serverQueries } from "@/lib/server-queries";
+import { Suspense } from "react";
+import { cachedGetIssueDetail } from "@/lib/server-queries";
+import { DetailSkeleton } from "../../../../../_components/skeletons";
 import { IssueDetailClient } from "./issue-detail-client";
 
-export default async function IssueDetailSlot(props: {
+export default function IssueDetailSlot(props: {
 	params: Promise<{ owner: string; name: string; number: string }>;
 }) {
-	const params = await props.params;
+	return (
+		<Suspense fallback={<DetailSkeleton />}>
+			<IssueDetailCached paramsPromise={props.params} />
+		</Suspense>
+	);
+}
+
+async function IssueDetailCached({
+	paramsPromise,
+}: {
+	paramsPromise: Promise<{ owner: string; name: string; number: string }>;
+}) {
+	const params = await paramsPromise;
 	const { owner, name } = params;
 	const num = Number.parseInt(params.number, 10);
 
-	const initialIssue = await serverQueries.getIssueDetail.queryPromise({
-		ownerLogin: owner,
-		name,
-		number: num,
-	});
+	const initialIssue = await cachedGetIssueDetail(owner, name, num);
 
 	return (
 		<IssueDetailClient

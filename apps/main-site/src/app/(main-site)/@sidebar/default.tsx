@@ -40,19 +40,21 @@ export default function SidebarSlot() {
 	const reposResult = useAtomValue(reposAtom);
 
 	return (
-		<div className="flex h-full flex-col">
-			<div className="shrink-0 p-3 border-b">
-				<h2 className="text-sm font-semibold text-foreground">Repositories</h2>
+		<div className="flex h-full flex-col bg-sidebar">
+			<div className="shrink-0 px-3 pt-3 pb-2 border-b border-sidebar-border">
+				<h2 className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground/70">
+					Repositories
+				</h2>
 				<AddRepoSection />
 			</div>
 			<div className="flex-1 overflow-y-auto">
-				<div className="p-1">
+				<div className="p-1.5">
 					{Result.isInitial(reposResult) && (
-						<div className="space-y-2 p-2">
+						<div className="space-y-1 p-1">
 							{[1, 2, 3].map((i) => (
-								<div key={i} className="space-y-1.5 px-2 py-2">
-									<Skeleton className="h-4 w-32" />
-									<Skeleton className="h-3 w-20" />
+								<div key={i} className="space-y-1 px-2 py-1.5">
+									<Skeleton className="h-3.5 w-28" />
+									<Skeleton className="h-2.5 w-20" />
 								</div>
 							))}
 						</div>
@@ -80,15 +82,15 @@ export default function SidebarSlot() {
 									key={owner}
 									defaultOpen={ownerHasActiveRepo || entries.length === 1}
 								>
-									<CollapsibleTrigger className="flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-xs font-semibold text-muted-foreground hover:bg-muted hover:text-foreground transition-colors [&[data-state=open]>svg]:rotate-90">
-										<ChevronRight className="h-3.5 w-3.5 shrink-0 transition-transform duration-200" />
+									<CollapsibleTrigger className="flex w-full items-center gap-1 rounded-md px-2 py-1 text-[11px] font-bold uppercase tracking-wider text-muted-foreground/60 hover:text-muted-foreground transition-colors [&[data-state=open]>svg]:rotate-90">
+										<ChevronRight className="h-3 w-3 shrink-0 transition-transform duration-200" />
 										<span className="truncate">{owner}</span>
-										<span className="ml-auto text-[10px] font-normal tabular-nums text-muted-foreground/60">
+										<span className="ml-auto text-[10px] font-normal tabular-nums">
 											{ownerRepos.length}
 										</span>
 									</CollapsibleTrigger>
 									<CollapsibleContent>
-										<div className="ml-2 border-l border-border/50 pl-1">
+										<div className="ml-2.5 border-l border-border/40 pl-0.5">
 											{ownerRepos.map((repo) => {
 												const isActive =
 													repo.ownerLogin === activeOwner &&
@@ -98,22 +100,30 @@ export default function SidebarSlot() {
 														key={repo.repositoryId}
 														href={`/${repo.ownerLogin}/${repo.name}/pulls`}
 														className={cn(
-															"flex flex-col gap-1 rounded-md px-2.5 py-1.5 text-sm transition-colors no-underline",
+															"flex flex-col gap-0.5 rounded-md px-2 py-1.5 text-sm transition-colors no-underline",
 															isActive
 																? "bg-accent text-accent-foreground"
-																: "text-muted-foreground hover:bg-muted hover:text-foreground",
+																: "text-muted-foreground hover:bg-accent/50 hover:text-foreground",
 														)}
 													>
-														<span className="font-medium text-foreground truncate text-xs">
+														<span className="font-semibold text-foreground truncate text-xs leading-tight">
 															{repo.name}
 														</span>
-														<div className="flex items-center gap-2 text-[11px]">
+														<div className="flex items-center gap-2 text-[10px] tabular-nums">
 															<span>{repo.openPrCount} PRs</span>
+															<span className="text-muted-foreground/50">
+																&middot;
+															</span>
 															<span>{repo.openIssueCount} issues</span>
 															{repo.failingCheckCount > 0 && (
-																<span className="text-destructive">
-																	{repo.failingCheckCount} failing
-																</span>
+																<>
+																	<span className="text-muted-foreground/50">
+																		&middot;
+																	</span>
+																	<span className="text-destructive font-medium">
+																		{repo.failingCheckCount} failing
+																	</span>
+																</>
 															)}
 														</div>
 													</Link>
@@ -129,7 +139,7 @@ export default function SidebarSlot() {
 			</div>
 
 			{/* Auth state — pinned to bottom-left */}
-			<div className="shrink-0 border-t px-3 py-2">
+			<div className="shrink-0 border-t border-sidebar-border px-3 py-2">
 				<UserButton />
 			</div>
 		</div>
@@ -139,14 +149,15 @@ export default function SidebarSlot() {
 /** Empty state shown when no repos are connected yet. Guides users to install the GitHub App. */
 function EmptyRepoState() {
 	return (
-		<div className="px-3 py-6 text-center">
-			<Download className="mx-auto size-8 text-muted-foreground/40" />
-			<p className="mt-2 text-xs font-medium text-foreground">
+		<div className="px-3 py-8 text-center">
+			<div className="mx-auto size-10 rounded-full bg-muted/60 flex items-center justify-center">
+				<Download className="size-4 text-muted-foreground/50" />
+			</div>
+			<p className="mt-3 text-xs font-semibold text-foreground">
 				No repositories yet
 			</p>
-			<p className="mt-1 text-[11px] text-muted-foreground leading-relaxed">
-				Install the GitHub App on your account or organization to start syncing
-				repositories.
+			<p className="mt-1 text-[11px] text-muted-foreground leading-relaxed max-w-[180px] mx-auto">
+				Install the GitHub App to start syncing repositories.
 			</p>
 			{GITHUB_APP_INSTALL_URL && (
 				<Button asChild size="sm" className="mt-3 h-7 text-xs w-full">

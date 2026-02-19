@@ -1,4 +1,6 @@
-import { serverQueries } from "@/lib/server-queries";
+import { Suspense } from "react";
+import { cachedListWorkflowRuns } from "@/lib/server-queries";
+import { ListSkeleton } from "../../../../_components/skeletons";
 import { ActionsListClient } from "./actions-list-client";
 
 /**
@@ -6,15 +8,24 @@ import { ActionsListClient } from "./actions-list-client";
  * On soft navigation (clicking a list item), Next.js keeps the existing
  * rendered page.tsx — this default.tsx is only used for hard navigation.
  */
-export default async function ActionsListDefault(props: {
+export default function ActionsListDefault(props: {
 	params: Promise<{ owner: string; name: string }>;
 }) {
-	const { owner, name } = await props.params;
+	return (
+		<Suspense fallback={<ListSkeleton />}>
+			<ActionsListCached paramsPromise={props.params} />
+		</Suspense>
+	);
+}
 
-	const initialData = await serverQueries.listWorkflowRuns.queryPromise({
-		ownerLogin: owner,
-		name,
-	});
+async function ActionsListCached({
+	paramsPromise,
+}: {
+	paramsPromise: Promise<{ owner: string; name: string }>;
+}) {
+	const { owner, name } = await paramsPromise;
+
+	const initialData = await cachedListWorkflowRuns(owner, name);
 
 	return (
 		<ActionsListClient owner={owner} name={name} initialData={initialData} />

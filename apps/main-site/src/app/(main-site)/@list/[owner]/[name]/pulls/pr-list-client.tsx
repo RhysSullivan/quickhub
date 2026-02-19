@@ -66,21 +66,23 @@ export function PrListClient({
 		<div className="flex h-full flex-col">
 			<div className="shrink-0 border-b">
 				<div className="flex items-center justify-between px-3 pt-2 pb-0">
-					<span className="text-sm font-semibold text-foreground truncate">
-						{owner}/{name}
+					<span className="text-xs font-bold text-foreground truncate tracking-tight">
+						{owner}
+						<span className="text-muted-foreground/40 mx-0.5">/</span>
+						{name}
 					</span>
 				</div>
 				<TabBar owner={owner} name={name} activeTab="pulls" />
 			</div>
 			<div className="flex-1 overflow-y-auto">
-				<div className="p-2">
-					<div className="flex gap-1 mb-2">
+				<div className="p-1.5">
+					<div className="flex gap-0.5 mb-1.5 px-1">
 						{(["open", "closed", "all"] as const).map((f) => (
 							<Button
 								key={f}
 								variant={stateFilter === f ? "default" : "ghost"}
 								size="sm"
-								className="h-6 text-[11px] px-2"
+								className="h-6 text-[10px] px-2 font-medium"
 								onClick={() => setStateFilter(f)}
 							>
 								{f === "open" ? "Open" : f === "closed" ? "Closed" : "All"}
@@ -89,7 +91,7 @@ export function PrListClient({
 					</div>
 
 					{prs.length === 0 && (
-						<p className="px-2 py-6 text-xs text-muted-foreground text-center">
+						<p className="px-2 py-8 text-xs text-muted-foreground text-center">
 							No {stateFilter !== "all" ? stateFilter : ""} pull requests.
 						</p>
 					)}
@@ -99,31 +101,40 @@ export function PrListClient({
 							key={pr.number}
 							href={`/${owner}/${name}/pulls/${pr.number}`}
 							className={cn(
-								"flex items-start gap-2 rounded-md px-2.5 py-2 text-sm transition-colors no-underline",
+								"flex items-start gap-2 rounded-md px-2 py-1.5 text-sm transition-colors no-underline",
 								activeNumber === pr.number
 									? "bg-accent text-accent-foreground"
-									: "hover:bg-muted",
+									: "hover:bg-accent/50",
 							)}
 						>
 							<PrStateIcon state={pr.state} draft={pr.draft} />
 							<div className="min-w-0 flex-1">
 								<div className="flex items-center gap-1.5">
-									<span className="font-medium text-xs truncate">
+									<span className="font-medium text-xs truncate leading-tight">
 										{pr.title}
 									</span>
 									{pr.draft && (
-										<Badge variant="outline" className="text-[9px] px-1 py-0">
+										<Badge
+											variant="outline"
+											className="text-[9px] px-1 py-0 shrink-0"
+										>
 											Draft
 										</Badge>
 									)}
 								</div>
-								<div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-0.5">
+								<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground mt-0.5 tabular-nums">
 									<span>#{pr.number}</span>
-									{pr.authorLogin && <span>{pr.authorLogin}</span>}
+									{pr.authorLogin && (
+										<>
+											<span className="text-muted-foreground/40">&middot;</span>
+											<span>{pr.authorLogin}</span>
+										</>
+									)}
+									<span className="text-muted-foreground/40">&middot;</span>
 									<span>{formatRelative(pr.githubUpdatedAt)}</span>
 									{pr.commentCount > 0 && (
 										<span className="flex items-center gap-0.5">
-											<MessageCircle className="size-3" />
+											<MessageCircle className="size-2.5" />
 											{pr.commentCount}
 										</span>
 									)}
@@ -156,37 +167,37 @@ function TabBar({
 			<Link
 				href={`/${owner}/${name}/pulls`}
 				className={cn(
-					"flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-b-2 -mb-px transition-colors no-underline",
+					"flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 					activeTab === "pulls"
 						? "border-foreground text-foreground"
 						: "border-transparent text-muted-foreground hover:text-foreground",
 				)}
 			>
-				<GitPullRequest className="size-3.5" />
+				<GitPullRequest className="size-3" />
 				PRs
 			</Link>
 			<Link
 				href={`/${owner}/${name}/issues`}
 				className={cn(
-					"flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-b-2 -mb-px transition-colors no-underline",
+					"flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 					activeTab === "issues"
 						? "border-foreground text-foreground"
 						: "border-transparent text-muted-foreground hover:text-foreground",
 				)}
 			>
-				<TriangleAlert className="size-3.5" />
+				<TriangleAlert className="size-3" />
 				Issues
 			</Link>
 			<Link
 				href={`/${owner}/${name}/actions`}
 				className={cn(
-					"flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-b-2 -mb-px transition-colors no-underline",
+					"flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 					activeTab === "actions"
 						? "border-foreground text-foreground"
 						: "border-transparent text-muted-foreground hover:text-foreground",
 				)}
 			>
-				<Play className="size-3.5" />
+				<Play className="size-3" />
 				Actions
 			</Link>
 		</div>

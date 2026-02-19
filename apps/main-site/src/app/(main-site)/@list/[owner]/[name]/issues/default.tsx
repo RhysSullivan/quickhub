@@ -1,4 +1,6 @@
-import { serverQueries } from "@/lib/server-queries";
+import { Suspense } from "react";
+import { cachedListIssues } from "@/lib/server-queries";
+import { ListSkeleton } from "../../../../_components/skeletons";
 import { IssueListClient } from "./issue-list-client";
 
 /**
@@ -6,16 +8,24 @@ import { IssueListClient } from "./issue-list-client";
  * On soft navigation (clicking a list item), Next.js keeps the existing
  * rendered page.tsx — this default.tsx is only used for hard navigation.
  */
-export default async function IssueListDefault(props: {
+export default function IssueListDefault(props: {
 	params: Promise<{ owner: string; name: string }>;
 }) {
-	const { owner, name } = await props.params;
+	return (
+		<Suspense fallback={<ListSkeleton />}>
+			<IssueListCached paramsPromise={props.params} />
+		</Suspense>
+	);
+}
 
-	const initialData = await serverQueries.listIssues.queryPromise({
-		ownerLogin: owner,
-		name,
-		state: "open",
-	});
+async function IssueListCached({
+	paramsPromise,
+}: {
+	paramsPromise: Promise<{ owner: string; name: string }>;
+}) {
+	const { owner, name } = await paramsPromise;
+
+	const initialData = await cachedListIssues(owner, name, "open");
 
 	return (
 		<IssueListClient owner={owner} name={name} initialData={initialData} />

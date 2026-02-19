@@ -50,16 +50,16 @@ export function HubShell({
 	const { owner, name, tab, hasDetail } = useRouteInfo();
 
 	return (
-		<div className="h-dvh w-full">
+		<div className="h-dvh w-full bg-background">
 			{/* Desktop: three-panel resizable */}
 			<div className="hidden md:block h-full">
 				<ResizablePanelGroup direction="horizontal" className="h-full">
 					{/* Panel 1: Repos */}
 					<ResizablePanel
-						defaultSize={18}
+						defaultSize={17}
 						minSize={14}
-						maxSize={30}
-						className="border-r"
+						maxSize={28}
+						className="border-r border-border/60"
 					>
 						{sidebar}
 					</ResizablePanel>
@@ -68,10 +68,10 @@ export function HubShell({
 
 					{/* Panel 2: List (PRs/Issues/Actions) */}
 					<ResizablePanel
-						defaultSize={28}
+						defaultSize={27}
 						minSize={20}
-						maxSize={45}
-						className="border-r"
+						maxSize={42}
+						className="border-r border-border/60"
 					>
 						{list}
 					</ResizablePanel>
@@ -79,7 +79,7 @@ export function HubShell({
 					<ResizableHandle />
 
 					{/* Panel 3: Detail/Content */}
-					<ResizablePanel defaultSize={54} minSize={30}>
+					<ResizablePanel defaultSize={56} minSize={30} className="min-w-0">
 						{detail}
 					</ResizablePanel>
 				</ResizablePanelGroup>
@@ -92,9 +92,9 @@ export function HubShell({
 						<div className="shrink-0 flex items-center gap-2 border-b px-3 py-2">
 							<Link
 								href={`/${owner}/${name}/${tab}`}
-								className="text-xs text-muted-foreground hover:text-foreground no-underline flex items-center gap-1"
+								className="text-[11px] text-muted-foreground hover:text-foreground no-underline flex items-center gap-1 font-medium"
 							>
-								<ArrowLeft className="size-3.5" />
+								<ArrowLeft className="size-3" />
 								Back to list
 							</Link>
 						</div>
@@ -105,12 +105,12 @@ export function HubShell({
 						<div className="shrink-0 flex items-center gap-2 border-b px-3 py-2">
 							<Link
 								href="/"
-								className="text-xs text-muted-foreground hover:text-foreground no-underline flex items-center gap-1"
+								className="text-[11px] text-muted-foreground hover:text-foreground no-underline flex items-center gap-1 font-medium"
 							>
-								<ArrowLeft className="size-3.5" />
+								<ArrowLeft className="size-3" />
 								Repos
 							</Link>
-							<span className="text-xs font-medium truncate">
+							<span className="text-[11px] font-semibold truncate">
 								{owner}/{name}
 							</span>
 						</div>

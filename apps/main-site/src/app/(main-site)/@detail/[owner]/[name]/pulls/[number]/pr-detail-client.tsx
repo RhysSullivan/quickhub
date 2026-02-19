@@ -121,16 +121,16 @@ export function PrDetailClient({
 
 	return (
 		<div className="h-full overflow-y-auto">
-			<div className="p-4">
+			<div className="p-4 max-w-4xl">
 				{/* Header */}
-				<div className="flex items-start gap-2">
+				<div className="flex items-start gap-2.5">
 					<PrStateIconLarge state={pr.state} draft={pr.draft} />
 					<div className="min-w-0 flex-1">
-						<h1 className="text-lg font-bold break-words leading-tight">
+						<h1 className="text-base font-bold break-words leading-snug tracking-tight">
 							{pr.title}
 						</h1>
-						<div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-							<span>#{pr.number}</span>
+						<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+							<span className="tabular-nums">#{pr.number}</span>
 							<PrStateBadge
 								state={pr.state}
 								draft={pr.draft}
@@ -144,16 +144,16 @@ export function PrDetailClient({
 											{pr.authorLogin[0]?.toUpperCase()}
 										</AvatarFallback>
 									</Avatar>
-									{pr.authorLogin}
+									<span className="font-medium">{pr.authorLogin}</span>
 								</span>
 							)}
 						</div>
-						<div className="mt-1 text-xs text-muted-foreground">
-							<code className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono">
+						<div className="mt-1.5 text-xs text-muted-foreground">
+							<code className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-mono">
 								{pr.headRefName}
 							</code>
-							{" → "}
-							<code className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono">
+							<span className="mx-1 text-muted-foreground/40">&rarr;</span>
+							<code className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-mono">
 								{pr.baseRefName}
 							</code>
 						</div>
@@ -161,23 +161,23 @@ export function PrDetailClient({
 				</div>
 
 				{/* Metadata */}
-				<div className="mt-3 flex flex-wrap gap-1.5">
+				<div className="mt-2.5 flex flex-wrap items-center gap-1.5">
 					{pr.mergeableState && (
 						<MergeableStateBadge state={pr.mergeableState} />
 					)}
 					<Badge variant="outline" className="text-[10px] font-mono">
 						{pr.headSha.slice(0, 7)}
 					</Badge>
-					<span className="text-xs text-muted-foreground">
+					<span className="text-[11px] text-muted-foreground">
 						Updated {formatRelative(pr.githubUpdatedAt)}
 					</span>
 				</div>
 
 				{/* Body */}
 				{pr.body && (
-					<Card className="mt-4">
-						<CardContent className="px-3 pt-3">
-							<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-sm">
+					<Card className="mt-3">
+						<CardContent>
+							<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-sm leading-relaxed">
 								<Streamdown>{pr.body}</Streamdown>
 							</div>
 						</CardContent>
@@ -198,24 +198,23 @@ export function PrDetailClient({
 
 				{/* Check runs */}
 				{pr.checkRuns.length > 0 && (
-					<div className="mt-5">
-						<h2 className="text-sm font-semibold mb-2">
-							Checks ({pr.checkRuns.length})
+					<div className="mt-4">
+						<h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
+							Checks{" "}
+							<span className="font-normal">({pr.checkRuns.length})</span>
 						</h2>
 						<div className="divide-y rounded-md border">
 							{pr.checkRuns.map((check) => (
 								<div
 									key={check.name}
-									className="flex items-center justify-between gap-2 px-3 py-1.5"
+									className="flex items-center justify-between gap-2 px-2.5 py-1.5"
 								>
 									<div className="flex items-center gap-2 min-w-0">
 										<CheckIcon
 											status={check.status}
 											conclusion={check.conclusion}
 										/>
-										<span className="text-xs font-medium truncate">
-											{check.name}
-										</span>
+										<span className="text-xs truncate">{check.name}</span>
 									</div>
 									{check.conclusion && (
 										<Badge
@@ -242,18 +241,18 @@ export function PrDetailClient({
 
 				{/* Reviews */}
 				{pr.reviews.length > 0 && (
-					<div className="mt-5">
-						<h2 className="text-sm font-semibold mb-2">
-							Reviews ({pr.reviews.length})
+					<div className="mt-4">
+						<h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
+							Reviews <span className="font-normal">({pr.reviews.length})</span>
 						</h2>
-						<div className="space-y-1.5">
+						<div className="space-y-1">
 							{pr.reviews.map((review) => (
 								<div
 									key={review.githubReviewId}
-									className="flex items-center gap-2 rounded-md border px-3 py-2"
+									className="flex items-center gap-2 rounded-md border px-2.5 py-1.5"
 								>
 									{review.authorLogin && (
-										<Avatar className="size-5">
+										<Avatar className="size-4">
 											<AvatarImage src={review.authorAvatarUrl ?? undefined} />
 											<AvatarFallback className="text-[8px]">
 												{review.authorLogin[0]?.toUpperCase()}
@@ -265,7 +264,7 @@ export function PrDetailClient({
 									</span>
 									<ReviewStateBadge state={review.state} />
 									{review.submittedAt && (
-										<span className="text-[10px] text-muted-foreground ml-auto">
+										<span className="text-[10px] text-muted-foreground ml-auto tabular-nums">
 											{formatRelative(review.submittedAt)}
 										</span>
 									)}
@@ -277,14 +276,15 @@ export function PrDetailClient({
 
 				{/* Comments */}
 				{pr.comments.length > 0 && (
-					<div className="mt-5">
-						<h2 className="text-sm font-semibold mb-2">
-							{pr.comments.length} Comment{pr.comments.length !== 1 ? "s" : ""}
+					<div className="mt-4">
+						<h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
+							Comments{" "}
+							<span className="font-normal">({pr.comments.length})</span>
 						</h2>
-						<div className="space-y-3">
+						<div className="space-y-2">
 							{pr.comments.map((comment) => (
 								<Card key={comment.githubCommentId}>
-									<CardHeader className="px-3 pb-1">
+									<CardHeader className="pb-0">
 										<div className="flex items-center gap-1.5 text-xs">
 											{comment.authorLogin && (
 												<span className="flex items-center gap-1">
@@ -296,18 +296,18 @@ export function PrDetailClient({
 															{comment.authorLogin[0]?.toUpperCase()}
 														</AvatarFallback>
 													</Avatar>
-													<span className="font-medium">
+													<span className="font-semibold">
 														{comment.authorLogin}
 													</span>
 												</span>
 											)}
-											<span className="text-muted-foreground">
+											<span className="text-muted-foreground/60 tabular-nums">
 												{formatRelative(comment.createdAt)}
 											</span>
 										</div>
 									</CardHeader>
-									<CardContent className="px-3 pb-3">
-										<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs">
+									<CardContent>
+										<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs leading-relaxed">
 											<Streamdown>{comment.body}</Streamdown>
 										</div>
 									</CardContent>

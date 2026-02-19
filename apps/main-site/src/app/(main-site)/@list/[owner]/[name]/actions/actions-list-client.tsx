@@ -65,16 +65,18 @@ export function ActionsListClient({
 		<div className="flex h-full flex-col">
 			<div className="shrink-0 border-b">
 				<div className="flex items-center justify-between px-3 pt-2 pb-0">
-					<span className="text-sm font-semibold text-foreground truncate">
-						{owner}/{name}
+					<span className="text-xs font-bold text-foreground truncate tracking-tight">
+						{owner}
+						<span className="text-muted-foreground/40 mx-0.5">/</span>
+						{name}
 					</span>
 				</div>
 				<TabBar owner={owner} name={name} activeTab="actions" />
 			</div>
 			<div className="flex-1 overflow-y-auto">
-				<div className="p-2">
+				<div className="p-1.5">
 					{runs.length === 0 && (
-						<p className="px-2 py-6 text-xs text-muted-foreground text-center">
+						<p className="px-2 py-8 text-xs text-muted-foreground text-center">
 							No workflow runs.
 						</p>
 					)}
@@ -84,31 +86,38 @@ export function ActionsListClient({
 							key={run.githubRunId}
 							href={`/${owner}/${name}/actions/${run.runNumber}`}
 							className={cn(
-								"flex items-start gap-2 rounded-md px-2.5 py-2 text-sm transition-colors no-underline",
+								"flex items-start gap-2 rounded-md px-2 py-1.5 text-sm transition-colors no-underline",
 								activeRunNumber === run.runNumber
 									? "bg-accent text-accent-foreground"
-									: "hover:bg-muted",
+									: "hover:bg-accent/50",
 							)}
 						>
 							<RunStatusIcon status={run.status} conclusion={run.conclusion} />
 							<div className="min-w-0 flex-1">
 								<div className="flex items-center gap-1.5">
-									<span className="font-medium text-xs truncate">
+									<span className="font-medium text-xs truncate leading-tight">
 										{run.workflowName ?? `Run #${run.runNumber}`}
 									</span>
 									{run.conclusion && (
 										<ConclusionBadge conclusion={run.conclusion} />
 									)}
 								</div>
-								<div className="flex items-center gap-1.5 text-[11px] text-muted-foreground mt-0.5">
+								<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground mt-0.5 tabular-nums">
 									<span>#{run.runNumber}</span>
 									{run.headBranch && (
-										<code className="rounded bg-muted px-1 py-0.5 text-[10px] font-mono">
+										<code className="rounded-sm bg-muted px-1 py-0.5 text-[9px] font-mono">
 											{run.headBranch}
 										</code>
 									)}
+									<span className="text-muted-foreground/40">&middot;</span>
 									<span>{run.event}</span>
-									{run.actorLogin && <span>{run.actorLogin}</span>}
+									{run.actorLogin && (
+										<>
+											<span className="text-muted-foreground/40">&middot;</span>
+											<span>{run.actorLogin}</span>
+										</>
+									)}
+									<span className="text-muted-foreground/40">&middot;</span>
 									<span>{formatRelative(run.updatedAt)}</span>
 								</div>
 							</div>
@@ -136,37 +145,37 @@ function TabBar({
 			<Link
 				href={`/${owner}/${name}/pulls`}
 				className={cn(
-					"flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-b-2 -mb-px transition-colors no-underline",
+					"flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 					activeTab === "pulls"
 						? "border-foreground text-foreground"
 						: "border-transparent text-muted-foreground hover:text-foreground",
 				)}
 			>
-				<GitPullRequest className="size-3.5" />
+				<GitPullRequest className="size-3" />
 				PRs
 			</Link>
 			<Link
 				href={`/${owner}/${name}/issues`}
 				className={cn(
-					"flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-b-2 -mb-px transition-colors no-underline",
+					"flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 					activeTab === "issues"
 						? "border-foreground text-foreground"
 						: "border-transparent text-muted-foreground hover:text-foreground",
 				)}
 			>
-				<TriangleAlert className="size-3.5" />
+				<TriangleAlert className="size-3" />
 				Issues
 			</Link>
 			<Link
 				href={`/${owner}/${name}/actions`}
 				className={cn(
-					"flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border-b-2 -mb-px transition-colors no-underline",
+					"flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 					activeTab === "actions"
 						? "border-foreground text-foreground"
 						: "border-transparent text-muted-foreground hover:text-foreground",
 				)}
 			>
-				<Play className="size-3.5" />
+				<Play className="size-3" />
 				Actions
 			</Link>
 		</div>
@@ -204,7 +213,7 @@ function ConclusionBadge({ conclusion }: { conclusion: string }) {
 		<Badge
 			variant={variant}
 			className={cn(
-				"text-[9px] px-1 py-0",
+				"text-[9px] px-1 py-0 shrink-0",
 				conclusion === "success" && "text-green-600",
 			)}
 		>

@@ -1,16 +1,26 @@
-import { serverQueries } from "@/lib/server-queries";
+import { Suspense } from "react";
+import { cachedListPullRequests } from "@/lib/server-queries";
+import { ListSkeleton } from "../../../../_components/skeletons";
 import { PrListClient } from "./pr-list-client";
 
-export default async function PrListSlot(props: {
+export default function PrListSlot(props: {
 	params: Promise<{ owner: string; name: string }>;
 }) {
-	const { owner, name } = await props.params;
+	return (
+		<Suspense fallback={<ListSkeleton />}>
+			<PrListCached paramsPromise={props.params} />
+		</Suspense>
+	);
+}
 
-	const initialData = await serverQueries.listPullRequests.queryPromise({
-		ownerLogin: owner,
-		name,
-		state: "open",
-	});
+async function PrListCached({
+	paramsPromise,
+}: {
+	paramsPromise: Promise<{ owner: string; name: string }>;
+}) {
+	const { owner, name } = await paramsPromise;
+
+	const initialData = await cachedListPullRequests(owner, name, "open");
 
 	return <PrListClient owner={owner} name={name} initialData={initialData} />;
 }

@@ -75,16 +75,16 @@ export function IssueDetailClient({
 
 	return (
 		<div className="h-full overflow-y-auto">
-			<div className="p-4">
+			<div className="p-4 max-w-4xl">
 				{/* Header */}
-				<div className="flex items-start gap-2">
+				<div className="flex items-start gap-2.5">
 					<IssueStateIconLarge state={issue.state} />
 					<div className="min-w-0 flex-1">
-						<h1 className="text-lg font-bold break-words leading-tight">
+						<h1 className="text-base font-bold break-words leading-snug tracking-tight">
 							{issue.title}
 						</h1>
-						<div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-							<span>#{issue.number}</span>
+						<div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+							<span className="tabular-nums">#{issue.number}</span>
 							<IssueStateBadge state={issue.state} closedAt={issue.closedAt} />
 							{issue.authorLogin && (
 								<span className="flex items-center gap-1">
@@ -94,7 +94,7 @@ export function IssueDetailClient({
 											{issue.authorLogin[0]?.toUpperCase()}
 										</AvatarFallback>
 									</Avatar>
-									{issue.authorLogin}
+									<span className="font-medium">{issue.authorLogin}</span>
 								</span>
 							)}
 						</div>
@@ -103,7 +103,7 @@ export function IssueDetailClient({
 
 				{/* Labels */}
 				{issue.labelNames.length > 0 && (
-					<div className="mt-2 flex flex-wrap gap-1.5">
+					<div className="mt-2 flex flex-wrap gap-1">
 						{issue.labelNames.map((label) => (
 							<Badge key={label} variant="outline" className="text-[10px]">
 								{label}
@@ -114,16 +114,16 @@ export function IssueDetailClient({
 
 				{/* Metadata */}
 				<div className="mt-2">
-					<span className="text-xs text-muted-foreground">
+					<span className="text-[11px] text-muted-foreground">
 						Updated {formatRelative(issue.githubUpdatedAt)}
 					</span>
 				</div>
 
 				{/* Body */}
 				{issue.body && (
-					<Card className="mt-4">
-						<CardContent className="px-3 pt-3">
-							<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-sm">
+					<Card className="mt-3">
+						<CardContent>
+							<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-sm leading-relaxed">
 								<Streamdown>{issue.body}</Streamdown>
 							</div>
 						</CardContent>
@@ -141,15 +141,15 @@ export function IssueDetailClient({
 
 				{/* Comments */}
 				{issue.comments.length > 0 && (
-					<div className="mt-5">
-						<h2 className="text-sm font-semibold mb-2">
-							{issue.comments.length} Comment
-							{issue.comments.length !== 1 ? "s" : ""}
+					<div className="mt-4">
+						<h2 className="text-xs font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
+							Comments{" "}
+							<span className="font-normal">({issue.comments.length})</span>
 						</h2>
-						<div className="space-y-3">
+						<div className="space-y-2">
 							{issue.comments.map((comment) => (
 								<Card key={comment.githubCommentId}>
-									<CardHeader className="px-3 pb-1">
+									<CardHeader className="pb-0">
 										<div className="flex items-center gap-1.5 text-xs">
 											{comment.authorLogin && (
 												<span className="flex items-center gap-1">
@@ -161,18 +161,18 @@ export function IssueDetailClient({
 															{comment.authorLogin[0]?.toUpperCase()}
 														</AvatarFallback>
 													</Avatar>
-													<span className="font-medium">
+													<span className="font-semibold">
 														{comment.authorLogin}
 													</span>
 												</span>
 											)}
-											<span className="text-muted-foreground">
+											<span className="text-muted-foreground/60 tabular-nums">
 												{formatRelative(comment.createdAt)}
 											</span>
 										</div>
 									</CardHeader>
-									<CardContent className="px-3 pb-3">
-										<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs">
+									<CardContent>
+										<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs leading-relaxed">
 											<Streamdown>{comment.body}</Streamdown>
 										</div>
 									</CardContent>
