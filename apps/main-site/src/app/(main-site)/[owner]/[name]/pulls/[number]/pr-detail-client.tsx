@@ -11,12 +11,13 @@ import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
 import { Card, CardContent, CardHeader } from "@packages/ui/components/card";
 import { Separator } from "@packages/ui/components/separator";
+import { Skeleton } from "@packages/ui/components/skeleton";
 import { Textarea } from "@packages/ui/components/textarea";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useOnDemandSync } from "@packages/ui/rpc/on-demand-sync";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { PatchDiff } from "@pierre/diffs/react";
-import { use, useId, useMemo, useState } from "react";
+import { use, useEffect, useId, useMemo, useState } from "react";
 import { MarkdownBody } from "@/components/markdown-body";
 
 // ---------------------------------------------------------------------------
@@ -362,6 +363,24 @@ export function FilesChangedClient({
 	);
 	const filesData = useSubscriptionWithInitial(filesAtom, initialData);
 
+	// On-demand file sync: if no files are cached, request a background sync once
+	const [, requestFileSync] = useAtom(client.requestPrFileSync.mutate);
+	const [fileSyncRequested, setFileSyncRequested] = useState(false);
+	useEffect(() => {
+		if (filesData.files.length === 0 && !fileSyncRequested) {
+			setFileSyncRequested(true);
+			requestFileSync({ ownerLogin: owner, name, number: prNumber });
+		}
+	}, [
+		filesData.files.length,
+		owner,
+		name,
+		prNumber,
+		requestFileSync,
+		fileSyncRequested,
+	]);
+	const isSyncingFiles = fileSyncRequested && filesData.files.length === 0;
+
 	const files = filesData.files;
 
 	// Build per-file patches — PatchDiff expects exactly 1 file per patch string
@@ -416,7 +435,22 @@ export function FilesChangedClient({
 				</h2>
 			</div>
 
-			{files.length === 0 && (
+			{files.length === 0 && isSyncingFiles && (
+				<div className="space-y-4">
+					<div className="flex items-center gap-2 text-sm text-muted-foreground">
+						<div className="size-4 rounded-full border-2 border-muted-foreground border-t-transparent animate-spin" />
+						<span>Loading file changes...</span>
+					</div>
+					{[1, 2, 3].map((i) => (
+						<div key={i}>
+							<Skeleton className="h-10 w-full rounded-t-lg rounded-b-none" />
+							<Skeleton className="h-32 w-full rounded-t-none rounded-b-lg" />
+						</div>
+					))}
+				</div>
+			)}
+
+			{files.length === 0 && !isSyncingFiles && (
 				<Card>
 					<CardContent className="px-3 pt-4 sm:px-6 sm:pt-6">
 						<p className="text-sm text-muted-foreground">

@@ -6,6 +6,7 @@ import {
 	confectSchema,
 } from "../confect";
 import { GitHubApiClient, GitHubApiError } from "../shared/githubApi";
+import { lookupGitHubTokenByUserIdConfect } from "../shared/githubToken";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -94,6 +95,8 @@ const syncPrFilesDef = factory.internalAction({
 		repositoryId: Schema.Number,
 		pullRequestNumber: Schema.Number,
 		headSha: Schema.String,
+		/** better-auth user ID whose GitHub OAuth token should be used. */
+		connectedByUserId: Schema.String,
 	},
 	success: Schema.Struct({
 		fileCount: Schema.Number,
@@ -140,7 +143,19 @@ const upsertPrFilesDef = factory.internalMutation({
 
 fetchPrDiffDef.implement((args) =>
 	Effect.gen(function* () {
-		const github = yield* GitHubApiClient;
+		const ctx = yield* ConfectActionCtx;
+		const identity = yield* ctx.auth.getUserIdentity();
+		if (Option.isNone(identity)) return null;
+
+		const token = yield* lookupGitHubTokenByUserIdConfect(
+			ctx.runQuery,
+			identity.value.subject,
+		);
+		const github = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(token),
+		);
+
 		const diff = yield* github.use(async (fetch) => {
 			const res = await fetch(
 				`/repos/${args.ownerLogin}/${args.name}/pulls/${args.number}`,
@@ -157,16 +172,22 @@ fetchPrDiffDef.implement((args) =>
 			return res.text();
 		});
 		return diff;
-	}).pipe(
-		Effect.catchAll(() => Effect.succeed(null)),
-		Effect.provide(GitHubApiClient.Live),
-	),
+	}).pipe(Effect.catchAll(() => Effect.succeed(null))),
 );
 
 syncPrFilesDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
-		const gh = yield* GitHubApiClient;
+
+		// Resolve the GitHub token from the connected user
+		const token = yield* lookupGitHubTokenByUserIdConfect(
+			ctx.runQuery,
+			args.connectedByUserId,
+		);
+		const gh = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(token),
+		);
 
 		// Paginated fetch of PR files
 		const allFiles: Array<Record<string, unknown>> = [];
@@ -232,7 +253,6 @@ syncPrFilesDef.implement((args) =>
 		Effect.catchAll(() =>
 			Effect.succeed({ fileCount: 0, truncatedPatches: 0 }),
 		),
-		Effect.provide(GitHubApiClient.Live),
 	),
 );
 

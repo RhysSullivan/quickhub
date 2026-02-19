@@ -13,6 +13,7 @@ import { Effect } from "effect";
 import { internal } from "../_generated/api";
 import { ConfectActionCtx } from "../confect";
 import { GitHubApiClient, GitHubApiError } from "../shared/githubApi";
+import { lookupGitHubTokenByUserIdConfect } from "../shared/githubToken";
 import { bootstrapRepoDef } from "./repoBootstrap";
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,16 @@ const userType = (v: unknown): "User" | "Bot" | "Organization" =>
 bootstrapRepoDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
-		const gh = yield* GitHubApiClient;
+
+		// Resolve the GitHub token from the connected user
+		const token = yield* lookupGitHubTokenByUserIdConfect(
+			ctx.runQuery,
+			args.connectedByUserId,
+		).pipe(Effect.orDie);
+		const gh = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(token),
+		);
 
 		// Mark job as running
 		yield* ctx.runMutation(internal.rpc.bootstrapWrite.updateSyncJobState, {
@@ -567,6 +577,7 @@ bootstrapRepoDef.implement((args) =>
 						repositoryId: args.githubRepoId,
 						pullRequestNumber: pr.pullRequestNumber,
 						headSha: pr.headSha,
+						connectedByUserId: args.connectedByUserId,
 					}),
 				);
 			}
@@ -580,5 +591,5 @@ bootstrapRepoDef.implement((args) =>
 		});
 
 		return result;
-	}).pipe(Effect.provide(GitHubApiClient.Live)),
+	}),
 );

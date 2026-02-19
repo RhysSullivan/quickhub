@@ -6,12 +6,15 @@
  * (e.g. due to a GitHub rate limit), it is retried with exponential backoff.
  * Steps that already completed are NOT re-run on retry.
  *
+ * Large fetches (PRs, issues) use a cursor-based loop where each chunk is its
+ * own durable step. If one chunk times out, only that chunk retries.
+ *
  * The workflow also manages the sync job lifecycle (pending → running → done/failed).
  */
 import { vWorkflowId } from "@convex-dev/workflow";
 import { v } from "convex/values";
 import { internal } from "../_generated/api";
-import { internalMutation } from "../_generated/server";
+import { internalMutation, internalQuery } from "../_generated/server";
 import { workflow } from "../shared/workflow";
 
 // ---------------------------------------------------------------------------
@@ -23,9 +26,12 @@ export const bootstrapRepo = workflow.define({
 		repositoryId: v.number(),
 		fullName: v.string(),
 		lockKey: v.string(),
+		/** better-auth user ID whose GitHub OAuth token should be used. */
+		connectedByUserId: v.string(),
 	},
 	handler: async (step, args): Promise<void> => {
 		const s = internal.rpc.bootstrapSteps;
+		const { connectedByUserId } = args;
 
 		// Mark job as running
 		await step.runMutation(internal.rpc.bootstrapWorkflow.markSyncJob, {
@@ -40,29 +46,58 @@ export const bootstrapRepo = workflow.define({
 			{
 				repositoryId: args.repositoryId,
 				fullName: args.fullName,
+				connectedByUserId,
 			},
 			{ name: "fetch-branches" },
 		);
 
-		// Step 2: Fetch pull requests (paginated)
-		const prResult = await step.runAction(
-			s.fetchPullRequests,
-			{
-				repositoryId: args.repositoryId,
-				fullName: args.fullName,
-			},
-			{ name: "fetch-pull-requests" },
-		);
+		// Step 2: Fetch pull requests (chunked cursor loop)
+		// Each chunk processes PAGES_PER_CHUNK pages (~1000 items), then returns
+		// a cursor for the next chunk. Each chunk is its own durable step.
+		{
+			let prCursor: string | null = null;
+			let chunkIndex = 0;
+			// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+			while (true) {
+				const result: { count: number; nextCursor: string | null } =
+					await step.runAction(
+						s.fetchPullRequestsChunk,
+						{
+							repositoryId: args.repositoryId,
+							fullName: args.fullName,
+							cursor: prCursor,
+							connectedByUserId,
+						},
+						{ name: `fetch-prs-${chunkIndex}` },
+					);
+				prCursor = result.nextCursor;
+				chunkIndex++;
+				if (prCursor === null) break;
+			}
+		}
 
-		// Step 3: Fetch issues (paginated)
-		await step.runAction(
-			s.fetchIssues,
-			{
-				repositoryId: args.repositoryId,
-				fullName: args.fullName,
-			},
-			{ name: "fetch-issues" },
-		);
+		// Step 3: Fetch issues (chunked cursor loop)
+		{
+			let issueCursor: string | null = null;
+			let chunkIndex = 0;
+			// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+			while (true) {
+				const result: { count: number; nextCursor: string | null } =
+					await step.runAction(
+						s.fetchIssuesChunk,
+						{
+							repositoryId: args.repositoryId,
+							fullName: args.fullName,
+							cursor: issueCursor,
+							connectedByUserId,
+						},
+						{ name: `fetch-issues-${chunkIndex}` },
+					);
+				issueCursor = result.nextCursor;
+				chunkIndex++;
+				if (issueCursor === null) break;
+			}
+		}
 
 		// Step 4: Fetch recent commits
 		await step.runAction(
@@ -70,13 +105,22 @@ export const bootstrapRepo = workflow.define({
 			{
 				repositoryId: args.repositoryId,
 				fullName: args.fullName,
+				connectedByUserId,
 			},
 			{ name: "fetch-commits" },
 		);
 
-		// Step 5: Fetch check runs for active PR head SHAs
-		const activePrHeadShas = prResult.openPrSyncTargets.map((t) => t.headSha);
-		// Deduplicate SHAs
+		// Step 5: Read open PRs from DB (written by fetchPullRequestsChunk)
+		// and fetch check runs for their head SHAs.
+		const openPrTargets = await step.runAction(
+			s.getOpenPrSyncTargets,
+			{ repositoryId: args.repositoryId, connectedByUserId },
+			{ name: "get-open-pr-targets" },
+		);
+
+		const activePrHeadShas = openPrTargets.map(
+			(t: { headSha: string }) => t.headSha,
+		);
 		const uniqueShas = [...new Set(activePrHeadShas)];
 
 		if (uniqueShas.length > 0) {
@@ -86,6 +130,7 @@ export const bootstrapRepo = workflow.define({
 					repositoryId: args.repositoryId,
 					fullName: args.fullName,
 					headShas: uniqueShas,
+					connectedByUserId,
 				},
 				{ name: "fetch-check-runs" },
 			);
@@ -97,18 +142,20 @@ export const bootstrapRepo = workflow.define({
 			{
 				repositoryId: args.repositoryId,
 				fullName: args.fullName,
+				connectedByUserId,
 			},
 			{ name: "fetch-workflow-runs" },
 		);
 
 		// Step 7: Schedule PR file syncs for open PRs
-		if (prResult.openPrSyncTargets.length > 0) {
+		if (openPrTargets.length > 0) {
 			await step.runAction(
 				s.schedulePrFileSyncs,
 				{
 					repositoryId: args.repositoryId,
 					fullName: args.fullName,
-					openPrSyncTargets: prResult.openPrSyncTargets,
+					openPrSyncTargets: openPrTargets,
+					connectedByUserId,
 				},
 				{ name: "schedule-pr-file-syncs" },
 			);
@@ -135,6 +182,7 @@ export const startBootstrap = internalMutation({
 		repositoryId: v.number(),
 		fullName: v.string(),
 		lockKey: v.string(),
+		connectedByUserId: v.string(),
 	},
 	returns: v.null(),
 	handler: async (ctx, args): Promise<null> => {
@@ -145,6 +193,7 @@ export const startBootstrap = internalMutation({
 				repositoryId: args.repositoryId,
 				fullName: args.fullName,
 				lockKey: args.lockKey,
+				connectedByUserId: args.connectedByUserId,
 			},
 			{
 				onComplete: internal.rpc.bootstrapWorkflow.onBootstrapComplete,
@@ -247,5 +296,42 @@ export const markSyncJob = internalMutation({
 		});
 
 		return null;
+	},
+});
+
+// ---------------------------------------------------------------------------
+// queryOpenPrSyncTargets — Internal query to read open PRs from DB.
+//
+// Called by the getOpenPrSyncTargets action in bootstrapSteps to avoid
+// passing large arrays through the workflow journal.
+// ---------------------------------------------------------------------------
+
+export const queryOpenPrSyncTargets = internalQuery({
+	args: {
+		repositoryId: v.number(),
+	},
+	returns: v.array(
+		v.object({
+			pullRequestNumber: v.number(),
+			headSha: v.string(),
+		}),
+	),
+	handler: async (
+		ctx,
+		args,
+	): Promise<Array<{ pullRequestNumber: number; headSha: string }>> => {
+		const openPrs = await ctx.db
+			.query("github_pull_requests")
+			.withIndex("by_repositoryId_and_state_and_githubUpdatedAt", (q) =>
+				q.eq("repositoryId", args.repositoryId).eq("state", "open"),
+			)
+			.collect();
+
+		return openPrs
+			.filter((pr) => pr.headSha !== "")
+			.map((pr) => ({
+				pullRequestNumber: pr.number,
+				headSha: pr.headSha,
+			}));
 	},
 });

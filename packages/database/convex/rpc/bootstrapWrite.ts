@@ -2,11 +2,25 @@ import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
 import { Effect, Option, Schema } from "effect";
 import { ConfectMutationCtx, confectSchema } from "../confect";
 import {
+	syncCheckRunInsert,
+	syncCheckRunReplace,
+	syncCommentInsert,
+	syncCommentReplace,
+	syncIssueInsert,
+	syncIssueReplace,
+	syncJobInsert,
+	syncJobReplace,
+	syncPrInsert,
+	syncPrReplace,
+	syncReviewInsert,
+	syncReviewReplace,
+} from "../shared/aggregateSync";
+import {
 	updateAllProjections,
-	updateIssueList,
-	updatePullRequestList,
 	updateRepoOverview,
-	updateWorkflowRunList,
+	upsertIssueView,
+	upsertPullRequestView,
+	upsertWorkflowRunView,
 } from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
@@ -257,6 +271,7 @@ upsertBranchesDef.implement((args) =>
 upsertPullRequestsDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
+		const rawCtx = ctx.rawCtx;
 		const now = Date.now();
 		let upserted = 0;
 
@@ -293,9 +308,18 @@ upsertPullRequestsDef.implement((args) =>
 				// Out-of-order protection: only update if newer
 				if (pr.githubUpdatedAt >= existing.value.githubUpdatedAt) {
 					yield* ctx.db.patch(existing.value._id, data);
+					// Sync aggregate: read back patched doc for new state
+					const updated = yield* ctx.db.get(existing.value._id);
+					if (Option.isSome(updated)) {
+						yield* syncPrReplace(rawCtx, existing.value, updated.value);
+					}
 				}
 			} else {
-				yield* ctx.db.insert("github_pull_requests", data);
+				const id = yield* ctx.db.insert("github_pull_requests", data);
+				const inserted = yield* ctx.db.get(id);
+				if (Option.isSome(inserted)) {
+					yield* syncPrInsert(rawCtx, inserted.value);
+				}
 			}
 			upserted++;
 		}
@@ -303,7 +327,11 @@ upsertPullRequestsDef.implement((args) =>
 		// Incrementally update projections so subscriptions push new data to the UI
 		// (skipped during bootstrap — projections are rebuilt once at the end)
 		if (!args.skipProjections) {
-			yield* updatePullRequestList(args.repositoryId).pipe(Effect.ignoreLogged);
+			for (const pr of args.pullRequests) {
+				yield* upsertPullRequestView(args.repositoryId, pr).pipe(
+					Effect.ignoreLogged,
+				);
+			}
 			yield* updateRepoOverview(args.repositoryId).pipe(Effect.ignoreLogged);
 		}
 
@@ -314,6 +342,7 @@ upsertPullRequestsDef.implement((args) =>
 upsertIssuesDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
+		const rawCtx = ctx.rawCtx;
 		const now = Date.now();
 		let upserted = 0;
 
@@ -345,9 +374,17 @@ upsertIssuesDef.implement((args) =>
 			if (Option.isSome(existing)) {
 				if (issue.githubUpdatedAt >= existing.value.githubUpdatedAt) {
 					yield* ctx.db.patch(existing.value._id, data);
+					const updated = yield* ctx.db.get(existing.value._id);
+					if (Option.isSome(updated)) {
+						yield* syncIssueReplace(rawCtx, existing.value, updated.value);
+					}
 				}
 			} else {
-				yield* ctx.db.insert("github_issues", data);
+				const id = yield* ctx.db.insert("github_issues", data);
+				const inserted = yield* ctx.db.get(id);
+				if (Option.isSome(inserted)) {
+					yield* syncIssueInsert(rawCtx, inserted.value);
+				}
 			}
 			upserted++;
 		}
@@ -355,7 +392,11 @@ upsertIssuesDef.implement((args) =>
 		// Incrementally update projections so subscriptions push new data to the UI
 		// (skipped during bootstrap — projections are rebuilt once at the end)
 		if (!args.skipProjections) {
-			yield* updateIssueList(args.repositoryId).pipe(Effect.ignoreLogged);
+			for (const issue of args.issues) {
+				yield* upsertIssueView(args.repositoryId, issue).pipe(
+					Effect.ignoreLogged,
+				);
+			}
 			yield* updateRepoOverview(args.repositoryId).pipe(Effect.ignoreLogged);
 		}
 
@@ -455,6 +496,7 @@ upsertCommitsDef.implement((args) =>
 upsertCheckRunsDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
+		const rawCtx = ctx.rawCtx;
 		let upserted = 0;
 
 		for (const cr of args.checkRuns) {
@@ -480,14 +522,36 @@ upsertCheckRunsDef.implement((args) =>
 
 			if (Option.isSome(existing)) {
 				yield* ctx.db.patch(existing.value._id, data);
+				const updated = yield* ctx.db.get(existing.value._id);
+				if (Option.isSome(updated)) {
+					yield* syncCheckRunReplace(rawCtx, existing.value, updated.value);
+				}
 			} else {
-				yield* ctx.db.insert("github_check_runs", data);
+				const id = yield* ctx.db.insert("github_check_runs", data);
+				const inserted = yield* ctx.db.get(id);
+				if (Option.isSome(inserted)) {
+					yield* syncCheckRunInsert(rawCtx, inserted.value);
+				}
 			}
 			upserted++;
 		}
 
-		// Check runs affect PR list view (lastCheckConclusion) and overview (failingCheckCount)
-		yield* updatePullRequestList(args.repositoryId).pipe(Effect.ignoreLogged);
+		// Check runs affect PR list view (lastCheckConclusion) and overview (failingCheckCount).
+		// Instead of full rebuild, find the affected PRs by headSha and update just those views.
+		const affectedShas = [...new Set(args.checkRuns.map((cr) => cr.headSha))];
+		for (const sha of affectedShas) {
+			const affectedPr = yield* ctx.db
+				.query("github_pull_requests")
+				.withIndex("by_repositoryId_and_headSha", (q) =>
+					q.eq("repositoryId", args.repositoryId).eq("headSha", sha),
+				)
+				.first();
+			if (Option.isSome(affectedPr)) {
+				yield* upsertPullRequestView(args.repositoryId, affectedPr.value).pipe(
+					Effect.ignoreLogged,
+				);
+			}
+		}
 		yield* updateRepoOverview(args.repositoryId).pipe(Effect.ignoreLogged);
 
 		return { upserted };
@@ -537,8 +601,12 @@ upsertWorkflowRunsDef.implement((args) =>
 			upserted++;
 		}
 
-		// Incrementally update workflow run projection
-		yield* updateWorkflowRunList(args.repositoryId).pipe(Effect.ignoreLogged);
+		// Incrementally update workflow run projection per-entity
+		for (const run of args.workflowRuns) {
+			yield* upsertWorkflowRunView(args.repositoryId, run).pipe(
+				Effect.ignoreLogged,
+			);
+		}
 
 		return { upserted };
 	}),
@@ -547,6 +615,7 @@ upsertWorkflowRunsDef.implement((args) =>
 upsertWorkflowJobsDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
+		const rawCtx = ctx.rawCtx;
 		let upserted = 0;
 
 		for (const job of args.workflowJobs) {
@@ -574,14 +643,37 @@ upsertWorkflowJobsDef.implement((args) =>
 
 			if (Option.isSome(existing)) {
 				yield* ctx.db.patch(existing.value._id, data);
+				const updated = yield* ctx.db.get(existing.value._id);
+				if (Option.isSome(updated)) {
+					yield* syncJobReplace(rawCtx, existing.value, updated.value);
+				}
 			} else {
-				yield* ctx.db.insert("github_workflow_jobs", data);
+				const id = yield* ctx.db.insert("github_workflow_jobs", data);
+				const inserted = yield* ctx.db.get(id);
+				if (Option.isSome(inserted)) {
+					yield* syncJobInsert(rawCtx, inserted.value);
+				}
 			}
 			upserted++;
 		}
 
-		// Job counts feed into the workflow run list view
-		yield* updateWorkflowRunList(args.repositoryId).pipe(Effect.ignoreLogged);
+		// Job counts feed into the workflow run list view — update affected runs
+		const affectedRunIds = [
+			...new Set(args.workflowJobs.map((j) => j.githubRunId)),
+		];
+		for (const runId of affectedRunIds) {
+			const run = yield* ctx.db
+				.query("github_workflow_runs")
+				.withIndex("by_repositoryId_and_githubRunId", (q) =>
+					q.eq("repositoryId", args.repositoryId).eq("githubRunId", runId),
+				)
+				.first();
+			if (Option.isSome(run)) {
+				yield* upsertWorkflowRunView(args.repositoryId, run.value).pipe(
+					Effect.ignoreLogged,
+				);
+			}
+		}
 
 		return { upserted };
 	}),
@@ -608,10 +700,12 @@ updateSyncJobStateDef.implement((args) =>
 			updatedAt: now,
 		});
 
-		// When bootstrap completes, rebuild all view tables so the repo
-		// appears in the dashboard immediately.
+		// When bootstrap completes, update the repo overview counters.
+		// The individual view tables (PR list, issue list, workflow runs)
+		// are updated incrementally during each batch write, so we only
+		// need to refresh the aggregate counts here.
 		if (args.state === "done" && job.value.repositoryId !== null) {
-			yield* updateAllProjections(job.value.repositoryId).pipe(
+			yield* updateRepoOverview(job.value.repositoryId).pipe(
 				Effect.ignoreLogged,
 			);
 		}

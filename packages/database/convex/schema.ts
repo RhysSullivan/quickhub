@@ -136,6 +136,13 @@ const GitHubRepositorySchema = Schema.Struct({
 	pushedAt: Schema.NullOr(Schema.Number),
 	githubUpdatedAt: Schema.Number,
 	cachedAt: Schema.Number,
+	/**
+	 * The better-auth user ID of whoever connected this repo.
+	 * Used to look up the user's GitHub OAuth token from the account table
+	 * for background syncs (webhooks, bootstrap) that lack a user session.
+	 * Only set when the connecting user has admin/webhook permissions.
+	 */
+	connectedByUserId: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const GitHubBranchSchema = Schema.Struct({
@@ -513,7 +520,8 @@ export const confectSchema = defineSchema({
 			"repositoryId",
 			"state",
 			"sortUpdated",
-		]),
+		])
+		.index("by_repositoryId_and_number", ["repositoryId", "number"]),
 
 	view_repo_issue_list: defineTable(ViewRepoIssueListSchema)
 		.index("by_repositoryId_and_sortUpdated", ["repositoryId", "sortUpdated"])
@@ -521,7 +529,8 @@ export const confectSchema = defineSchema({
 			"repositoryId",
 			"state",
 			"sortUpdated",
-		]),
+		])
+		.index("by_repositoryId_and_number", ["repositoryId", "number"]),
 
 	view_repo_workflow_run_list: defineTable(ViewRepoWorkflowRunListSchema)
 		.index("by_repositoryId_and_sortUpdated", ["repositoryId", "sortUpdated"])
@@ -529,7 +538,8 @@ export const confectSchema = defineSchema({
 			"repositoryId",
 			"conclusion",
 			"sortUpdated",
-		]),
+		])
+		.index("by_repositoryId_and_githubRunId", ["repositoryId", "githubRunId"]),
 
 	view_activity_feed: defineTable(ViewActivityFeedSchema)
 		.index("by_repositoryId_and_createdAt", ["repositoryId", "createdAt"])

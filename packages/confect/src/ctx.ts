@@ -520,6 +520,12 @@ export interface ConfectQueryCtx<Tables extends GenericConfectSchema> {
 
 	db: ConfectDatabaseReader<Tables>;
 	auth: ConfectAuth;
+
+	/**
+	 * The raw Convex query context, useful for passing to Convex components
+	 * (e.g. `@convex-dev/aggregate`) that expect standard Convex context objects.
+	 */
+	rawCtx: GenericQueryCtx<GenericDataModel>;
 }
 
 export interface ConfectMutationCtx<Tables extends GenericConfectSchema> {
@@ -538,6 +544,12 @@ export interface ConfectMutationCtx<Tables extends GenericConfectSchema> {
 
 	db: ConfectDatabaseWriter<Tables>;
 	auth: ConfectAuth;
+
+	/**
+	 * The raw Convex mutation context, useful for passing to Convex components
+	 * (e.g. `@convex-dev/aggregate`) that expect standard Convex context objects.
+	 */
+	rawCtx: GenericMutationCtx<GenericDataModel>;
 }
 
 export interface ConfectActionCtx<Tables extends GenericConfectSchema> {
@@ -582,6 +594,7 @@ export const makeQueryCtx = <Tables extends GenericConfectSchema>(
 		),
 	db: new ConfectDatabaseReaderImpl(ctx.db, tableSchemas),
 	auth: new ConfectAuthImpl(ctx.auth),
+	rawCtx: ctx,
 });
 
 export const makeMutationCtx = <Tables extends GenericConfectSchema>(
@@ -605,6 +618,7 @@ export const makeMutationCtx = <Tables extends GenericConfectSchema>(
 	scheduler: ctx.scheduler,
 	db: new ConfectDatabaseWriterImpl(ctx.db, tableSchemas),
 	auth: new ConfectAuthImpl(ctx.auth),
+	rawCtx: ctx,
 });
 
 /**

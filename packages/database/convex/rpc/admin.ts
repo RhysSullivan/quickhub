@@ -1,7 +1,16 @@
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
 import { Effect, Schema } from "effect";
 import { ConfectMutationCtx, ConfectQueryCtx, confectSchema } from "../confect";
-import { updateAllProjections } from "../shared/projections";
+import {
+	checkRunsByRepo,
+	commentsByIssueNumber,
+	issuesByRepo,
+	jobsByWorkflowRun,
+	prsByRepo,
+	reviewsByPrNumber,
+	webhooksByState,
+} from "../shared/aggregates";
+import { updateRepoOverview } from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -129,41 +138,81 @@ healthCheckDef.implement(() =>
 tableCountsDef.implement(() =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
-		// Bounded counts — cap at 10000 per table to avoid unbounded reads
+		const raw = ctx.rawCtx;
+
+		// Small tables (<10k) — bounded .take() is fine
 		const cap = 10001;
 		const count = (items: Array<unknown>) => Math.min(items.length, 10000);
 
 		const repositories = yield* ctx.db.query("github_repositories").take(cap);
 		const branches = yield* ctx.db.query("github_branches").take(cap);
 		const commits = yield* ctx.db.query("github_commits").take(cap);
-		const pullRequests = yield* ctx.db.query("github_pull_requests").take(cap);
-		const pullRequestReviews = yield* ctx.db
-			.query("github_pull_request_reviews")
-			.take(cap);
-		const issues = yield* ctx.db.query("github_issues").take(cap);
-		const issueComments = yield* ctx.db
-			.query("github_issue_comments")
-			.take(cap);
-		const checkRuns = yield* ctx.db.query("github_check_runs").take(cap);
 		const users = yield* ctx.db.query("github_users").take(cap);
 		const syncJobs = yield* ctx.db.query("github_sync_jobs").take(cap);
 		const installations = yield* ctx.db.query("github_installations").take(cap);
-		const webhookEvents = yield* ctx.db
-			.query("github_webhook_events_raw")
+
+		// Unbounded tables — O(log n) aggregate counts.
+		// These aggregates are namespaced, so we iterate repos to sum totals.
+		// For a simpler approach, we sum across all known repos.
+		const repos = repositories;
+		const repoIds = repos.map((r) => r.githubRepoId);
+
+		let pullRequestsTotal = 0;
+		let issuesTotal = 0;
+		let checkRunsTotal = 0;
+		const issueCommentsTotal = 0;
+		const pullRequestReviewsTotal = 0;
+		const workflowJobsTotal = 0;
+
+		for (const repoId of repoIds) {
+			const [prCount, issueCount, checkRunCount] = yield* Effect.promise(() =>
+				Promise.all([
+					prsByRepo.count(raw, { namespace: repoId }),
+					issuesByRepo.count(raw, { namespace: repoId }),
+					checkRunsByRepo.count(raw, { namespace: repoId }),
+				]),
+			);
+			pullRequestsTotal += prCount;
+			issuesTotal += issueCount;
+			checkRunsTotal += checkRunCount;
+		}
+
+		// Comments, reviews, and jobs are namespaced by compound keys.
+		// Summing across all namespaces isn't practical without listing them.
+		// For these, we fall back to bounded .take() since they grow proportionally
+		// to their parent entities which are already counted via aggregates.
+		const issueCommentsDocs = yield* ctx.db
+			.query("github_issue_comments")
 			.take(cap);
+		const pullRequestReviewsDocs = yield* ctx.db
+			.query("github_pull_request_reviews")
+			.take(cap);
+
+		// Webhook events — use aggregate by summing known states
+		const [webhookPending, webhookProcessed, webhookRetry, webhookFailed] =
+			yield* Effect.promise(() =>
+				Promise.all([
+					webhooksByState.count(raw, { namespace: "pending" }),
+					webhooksByState.count(raw, { namespace: "processed" }),
+					webhooksByState.count(raw, { namespace: "retry" }),
+					webhooksByState.count(raw, { namespace: "failed" }),
+				]),
+			);
+
 		return {
 			repositories: count(repositories),
 			branches: count(branches),
 			commits: count(commits),
-			pullRequests: count(pullRequests),
-			pullRequestReviews: count(pullRequestReviews),
-			issues: count(issues),
-			issueComments: count(issueComments),
-			checkRuns: count(checkRuns),
+			pullRequests: pullRequestsTotal,
+			pullRequestReviews: count(pullRequestReviewsDocs),
+			issues: issuesTotal,
+			issueComments: count(issueCommentsDocs),
+			checkRuns: checkRunsTotal,
 			users: count(users),
 			syncJobs: count(syncJobs),
 			installations: count(installations),
-			webhookEvents: count(webhookEvents),
+			webhookEvents:
+				webhookPending + webhookProcessed + webhookRetry + webhookFailed,
 		};
 	}),
 );
@@ -186,10 +235,14 @@ syncJobStatusDef.implement(() =>
 repairProjectionsDef.implement(() =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
+		// Only repair the overview counters. The individual view tables
+		// (PR list, issue list, workflow runs) are now maintained incrementally
+		// via per-entity upserts in bootstrapWrite and webhookProcessor.
+		// Doing a full rebuild here would be too expensive for large repos.
 		const repos = yield* ctx.db.query("github_repositories").collect();
 		let repairedRepoCount = 0;
 		for (const repo of repos) {
-			yield* updateAllProjections(repo.githubRepoId).pipe(Effect.ignoreLogged);
+			yield* updateRepoOverview(repo.githubRepoId).pipe(Effect.ignoreLogged);
 			repairedRepoCount++;
 		}
 		return { repairedRepoCount };
@@ -199,25 +252,19 @@ repairProjectionsDef.implement(() =>
 queueHealthDef.implement(() =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
+		const raw = ctx.rawCtx;
 
-		// Count by state using indexed queries.
-		// Pending/retry/failed should always be small (actionable items).
-		// Processed can grow large, so we count with a bounded take.
-		const countByState = (
-			state: "pending" | "processed" | "failed" | "retry",
-		) =>
-			ctx.db
-				.query("github_webhook_events_raw")
-				.withIndex("by_processState_and_receivedAt", (q) =>
-					q.eq("processState", state),
-				)
-				.take(10001)
-				.pipe(Effect.map((items) => Math.min(items.length, 10000)));
+		// O(log n) counts via webhooksByState aggregate
+		const [pending, retry, processed, failed] = yield* Effect.promise(() =>
+			Promise.all([
+				webhooksByState.count(raw, { namespace: "pending" }),
+				webhooksByState.count(raw, { namespace: "retry" }),
+				webhooksByState.count(raw, { namespace: "processed" }),
+				webhooksByState.count(raw, { namespace: "failed" }),
+			]),
+		);
 
-		const pending = yield* countByState("pending");
-		const retry = yield* countByState("retry");
-		const processed = yield* countByState("processed");
-		const failed = yield* countByState("failed");
+		// Dead letters are a separate table, typically small
 		const deadLetters = yield* ctx.db
 			.query("github_dead_letters")
 			.take(10001)
@@ -236,28 +283,25 @@ queueHealthDef.implement(() =>
 systemStatusDef.implement(() =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
+		const raw = ctx.rawCtx;
 		const now = Date.now();
 		const cap = 10001;
 		const count = (items: Array<unknown>) => Math.min(items.length, 10000);
 
-		// -- Queue health --
-		const boundedQueueCount = (
-			state: "pending" | "processed" | "failed" | "retry",
-		) =>
-			ctx.db
-				.query("github_webhook_events_raw")
-				.withIndex("by_processState_and_receivedAt", (q) =>
-					q.eq("processState", state),
-				)
-				.take(cap)
-				.pipe(Effect.map(count));
+		// -- Queue health (O(log n) via aggregates) --
+		const [queuePending, queueRetry, queueFailed] = yield* Effect.promise(() =>
+			Promise.all([
+				webhooksByState.count(raw, { namespace: "pending" }),
+				webhooksByState.count(raw, { namespace: "retry" }),
+				webhooksByState.count(raw, { namespace: "failed" }),
+			]),
+		);
 
-		const queuePending = yield* boundedQueueCount("pending");
-		const queueRetry = yield* boundedQueueCount("retry");
-		const queueFailed = yield* boundedQueueCount("failed");
 		const deadLetterItems = yield* ctx.db
 			.query("github_dead_letters")
 			.take(cap);
+
+		// Recent processed in last hour — still needs index range query
 		const oneHourAgo = now - 3_600_000;
 		const recentProcessed = yield* ctx.db
 			.query("github_webhook_events_raw")

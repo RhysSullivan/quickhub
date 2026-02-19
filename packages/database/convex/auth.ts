@@ -30,11 +30,14 @@ export const authComponent = createClient<GenericDataModel, typeof authSchema>(
 // Auth options factory
 // ---------------------------------------------------------------------------
 
-const siteUrl = process.env.SITE_URL;
+const convexSiteUrl = process.env.CONVEX_SITE_URL;
 
 export const createAuthOptions = (ctx: GenericCtx) => {
+	const siteUrl = process.env.SITE_URL;
+
 	return {
-		baseURL: siteUrl,
+		baseURL: convexSiteUrl,
+		trustedOrigins: siteUrl ? [siteUrl] : [],
 		database: authComponent.adapter(ctx),
 		account: {
 			accountLinking: {
@@ -46,8 +49,8 @@ export const createAuthOptions = (ctx: GenericCtx) => {
 			github: {
 				clientId: process.env.GITHUB_CLIENT_ID ?? "",
 				clientSecret: process.env.GITHUB_CLIENT_SECRET ?? "",
-				// Request repo scope so the user token can list repos for app installation
-				scope: ["read:user", "user:email"],
+				// Full repo scope so the user's OAuth token can read/write repository data
+				scope: ["read:user", "user:email", "repo"],
 			},
 		},
 		plugins: [

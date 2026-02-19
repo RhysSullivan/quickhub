@@ -954,6 +954,10 @@ requestPrFileSyncDef.implement((args) =>
 		if (Option.isSome(existingFile)) return { scheduled: false };
 
 		// 4. No files cached — schedule a background sync
+		// Need the repo's connectedByUserId for the GitHub token
+		const connectedByUserId = repo.value.connectedByUserId;
+		if (!connectedByUserId) return { scheduled: false };
+
 		yield* Effect.promise(() =>
 			ctx.scheduler.runAfter(0, internal.rpc.githubActions.syncPrFiles, {
 				ownerLogin: args.ownerLogin,
@@ -961,6 +965,7 @@ requestPrFileSyncDef.implement((args) =>
 				repositoryId,
 				pullRequestNumber: args.number,
 				headSha,
+				connectedByUserId,
 			}),
 		);
 

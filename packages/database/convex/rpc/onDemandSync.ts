@@ -34,6 +34,7 @@ import {
 	GitHubApiError,
 	GitHubRateLimitError,
 } from "../shared/githubApi";
+import { lookupGitHubTokenByUserIdConfect } from "../shared/githubToken";
 import { updateAllProjections } from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
@@ -210,6 +211,7 @@ ensureRepoDef.implement((args) =>
 			pushedAt: null,
 			githubUpdatedAt: now,
 			cachedAt: now,
+			connectedByUserId: null,
 		});
 
 		return {
@@ -422,7 +424,35 @@ const syncPullRequestDef = factory.action({
 syncPullRequestDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
-		const gh = yield* GitHubApiClient;
+
+		// Resolve the signed-in user's GitHub OAuth token
+		const identity = yield* ctx.auth.getUserIdentity();
+		if (Option.isNone(identity)) {
+			return yield* new EntityNotFound({
+				ownerLogin: args.ownerLogin,
+				name: args.name,
+				entityType: "pull_request",
+				number: args.number,
+			});
+		}
+		const userId = identity.value.subject;
+		const token = yield* lookupGitHubTokenByUserIdConfect(
+			ctx.runQuery,
+			userId,
+		).pipe(
+			Effect.mapError(
+				() =>
+					new RepoNotFoundOnGitHub({
+						ownerLogin: args.ownerLogin,
+						name: args.name,
+					}),
+			),
+		);
+		const gh = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(token),
+		);
+
 		const fullName = `${args.ownerLogin}/${args.name}`;
 		const users = createUserCollector();
 
@@ -740,12 +770,13 @@ syncPullRequestDef.implement((args) =>
 					repositoryId,
 					pullRequestNumber: args.number,
 					headSha: pr.headSha,
+					connectedByUserId: userId,
 				}),
 			);
 		}
 
 		return { synced: true, repositoryId };
-	}).pipe(Effect.provide(GitHubApiClient.Live)),
+	}),
 );
 
 // ---------------------------------------------------------------------------
@@ -768,7 +799,34 @@ const syncIssueDef = factory.action({
 syncIssueDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
-		const gh = yield* GitHubApiClient;
+
+		// Resolve the signed-in user's GitHub OAuth token
+		const identity = yield* ctx.auth.getUserIdentity();
+		if (Option.isNone(identity)) {
+			return yield* new EntityNotFound({
+				ownerLogin: args.ownerLogin,
+				name: args.name,
+				entityType: "issue",
+				number: args.number,
+			});
+		}
+		const token = yield* lookupGitHubTokenByUserIdConfect(
+			ctx.runQuery,
+			identity.value.subject,
+		).pipe(
+			Effect.mapError(
+				() =>
+					new RepoNotFoundOnGitHub({
+						ownerLogin: args.ownerLogin,
+						name: args.name,
+					}),
+			),
+		);
+		const gh = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(token),
+		);
+
 		const fullName = `${args.ownerLogin}/${args.name}`;
 		const userCollector = createUserCollector();
 
@@ -994,7 +1052,7 @@ syncIssueDef.implement((args) =>
 		});
 
 		return { synced: true, repositoryId };
-	}).pipe(Effect.provide(GitHubApiClient.Live)),
+	}),
 );
 
 // ---------------------------------------------------------------------------

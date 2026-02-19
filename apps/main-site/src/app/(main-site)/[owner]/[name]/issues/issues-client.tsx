@@ -8,11 +8,7 @@ import {
 } from "@packages/ui/components/avatar";
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
-import {
-	Card,
-	CardDescription,
-	CardHeader,
-} from "@packages/ui/components/card";
+
 import { Link } from "@packages/ui/components/link";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { useQueryStates } from "nuqs";
@@ -129,19 +125,15 @@ function IssueList({
 }) {
 	if (issues.length === 0) {
 		return (
-			<Card className="mt-4">
-				<CardHeader>
-					<CardDescription>
-						No {stateFilter !== "all" ? stateFilter : ""} issues found.
-					</CardDescription>
-				</CardHeader>
-			</Card>
+			<p className="mt-6 text-sm text-muted-foreground">
+				No {stateFilter !== "all" ? stateFilter : ""} issues found.
+			</p>
 		);
 	}
 
 	return (
 		<>
-			<div className="mt-4 divide-y rounded-lg border">
+			<div className="mt-4 divide-y">
 				{issues.map((issue) => (
 					<Link
 						key={issue.number}

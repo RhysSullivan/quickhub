@@ -22,6 +22,7 @@ import {
 	confectSchema,
 } from "../confect";
 import { GitHubApiClient } from "../shared/githubApi";
+import { lookupGitHubTokenByUserIdConfect } from "../shared/githubToken";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -429,6 +430,7 @@ executeWriteOperationDef.implement((args) =>
 			inputPayloadJson: Schema.optional(Schema.String),
 			ownerLogin: Schema.optional(Schema.String),
 			repoName: Schema.optional(Schema.String),
+			connectedByUserId: Schema.optional(Schema.NullOr(Schema.String)),
 		});
 		const op = Schema.decodeUnknownSync(OpResultSchema)(opResult);
 		if (!op.found) {
@@ -442,7 +444,19 @@ executeWriteOperationDef.implement((args) =>
 		const ownerLogin = op.ownerLogin ?? "";
 		const repoName = op.repoName ?? "";
 
-		const gh = yield* GitHubApiClient;
+		// Resolve the GitHub token from the repo's connected user
+		const connectedByUserId = op.connectedByUserId ?? null;
+		if (!connectedByUserId) {
+			return { completed: false };
+		}
+		const token = yield* lookupGitHubTokenByUserIdConfect(
+			ctx.runQuery,
+			connectedByUserId,
+		);
+		const gh = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(token),
+		);
 
 		// Dispatch based on operation type
 		const result = yield* Effect.gen(function* () {
@@ -515,10 +529,7 @@ executeWriteOperationDef.implement((args) =>
 		}
 
 		return { completed: result.success };
-	}).pipe(
-		Effect.catchAll(() => Effect.succeed({ completed: false })),
-		Effect.provide(GitHubApiClient.Live),
-	),
+	}).pipe(Effect.catchAll(() => Effect.succeed({ completed: false }))),
 );
 
 // ---------------------------------------------------------------------------
@@ -958,6 +969,7 @@ const getWriteOperationDef = factory.internalQuery({
 		inputPayloadJson: Schema.optional(Schema.String),
 		ownerLogin: Schema.optional(Schema.String),
 		repoName: Schema.optional(Schema.String),
+		connectedByUserId: Schema.optional(Schema.NullOr(Schema.String)),
 	}),
 });
 
@@ -973,12 +985,23 @@ getWriteOperationDef.implement((args) =>
 
 		if (Option.isNone(op)) return { found: false };
 
+		// Look up the repo's connectedByUserId
+		const repo = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_ownerLogin_and_name", (q) =>
+				q.eq("ownerLogin", op.value.ownerLogin).eq("name", op.value.repoName),
+			)
+			.first();
+
 		return {
 			found: true,
 			operationType: op.value.operationType,
 			inputPayloadJson: op.value.inputPayloadJson,
 			ownerLogin: op.value.ownerLogin,
 			repoName: op.value.repoName,
+			connectedByUserId: Option.isSome(repo)
+				? repo.value.connectedByUserId
+				: null,
 		};
 	}),
 );

@@ -57,6 +57,8 @@ const connectRepoDef = factory.mutation({
 		visibility: Schema.Literal("public", "private", "internal"),
 		/** Is private? */
 		isPrivate: Schema.Boolean,
+		/** The better-auth user ID of whoever connected this repo. */
+		connectedByUserId: Schema.NullOr(Schema.String),
 	},
 	success: Schema.Struct({
 		repositoryId: Schema.Number,
@@ -137,6 +139,7 @@ connectRepoDef.implement((args) =>
 			pushedAt: null,
 			githubUpdatedAt: now,
 			cachedAt: now,
+			connectedByUserId: args.connectedByUserId,
 		});
 
 		// Create sync job (with dedup lockKey)
@@ -169,13 +172,16 @@ connectRepoDef.implement((args) =>
 
 			syncJobId = String(jobId);
 
-			// Start durable bootstrap workflow
-			yield* ctx.runMutation(internal.rpc.bootstrapWorkflow.startBootstrap, {
-				repositoryId: args.githubRepoId,
-				fullName: args.fullName,
-				lockKey,
-			});
-			bootstrapScheduled = true;
+			// Start durable bootstrap workflow (requires a connected user token)
+			if (args.connectedByUserId !== null) {
+				yield* ctx.runMutation(internal.rpc.bootstrapWorkflow.startBootstrap, {
+					repositoryId: args.githubRepoId,
+					fullName: args.fullName,
+					lockKey,
+					connectedByUserId: args.connectedByUserId,
+				});
+				bootstrapScheduled = true;
+			}
 		} else {
 			syncJobId = String(existingJob.value._id);
 		}

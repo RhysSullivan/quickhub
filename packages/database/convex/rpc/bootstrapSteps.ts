@@ -8,17 +8,25 @@
  * These are vanilla Convex `internalAction`s (not Confect) because they are
  * called by the workflow engine via `step.runAction()`.
  *
+ * Large paginated fetches (PRs, issues) are split into "chunk" actions that
+ * process N pages at a time. The workflow orchestrates a cursor loop so each
+ * chunk is its own durable step — if one chunk times out, only that chunk
+ * retries.
+ *
  * Errors are allowed to throw (via `Effect.runPromise` + `Effect.orDie`).
  * The workflow's retry policy handles transient failures like rate limits.
  */
+
 import { v } from "convex/values";
 import { Effect } from "effect";
 import { internal } from "../_generated/api";
+import type { ActionCtx } from "../_generated/server";
 import { internalAction } from "../_generated/server";
 import { GitHubApiClient, GitHubApiError } from "../shared/githubApi";
+import { lookupGitHubTokenByUserId } from "../shared/githubToken";
 
 // ---------------------------------------------------------------------------
-// GitHub response parsing helpers (shared with repoBootstrapImpl)
+// GitHub response parsing helpers
 // ---------------------------------------------------------------------------
 
 const parseNextLink = (linkHeader: string | null): string | null => {
@@ -83,29 +91,50 @@ const createUserCollector = () => {
 };
 
 // ---------------------------------------------------------------------------
-// Helper: run Effect with GitHubApiClient, converting errors to throws
-// so the workflow retry policy handles them.
+// Token resolution helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Resolve a GitHubApiClient from the user's OAuth token, then run an
+ * Effect that requires `GitHubApiClient` in its environment.
+ */
 const runWithGitHub = <A>(
+	ctx: ActionCtx,
+	connectedByUserId: string,
 	effect: Effect.Effect<A, never, GitHubApiClient>,
 ): Promise<A> =>
-	Effect.runPromise(Effect.provide(effect, GitHubApiClient.Live));
+	Effect.runPromise(
+		Effect.gen(function* () {
+			const token = yield* lookupGitHubTokenByUserId(
+				ctx.runQuery,
+				connectedByUserId,
+			);
+			return yield* Effect.provide(effect, GitHubApiClient.fromToken(token));
+		}).pipe(Effect.orDie),
+	);
 
-// ---------------------------------------------------------------------------
-// Helper: write users in batches
-// ---------------------------------------------------------------------------
+/**
+ * Resolve a GitHubApiClient service instance from a connectedByUserId.
+ * Returns the client directly so callers can use it across multiple
+ * paginated calls without re-resolving the token each time.
+ */
+const resolveGitHubClient = (ctx: ActionCtx, connectedByUserId: string) =>
+	Effect.runPromise(
+		Effect.gen(function* () {
+			const token = yield* lookupGitHubTokenByUserId(
+				ctx.runQuery,
+				connectedByUserId,
+			);
+			return yield* Effect.provide(
+				GitHubApiClient,
+				GitHubApiClient.fromToken(token),
+			);
+		}).pipe(Effect.orDie),
+	);
 
-type ActionCtx = {
-	runMutation: <T>(
-		reference: import("convex/server").FunctionReference<
-			"mutation",
-			"internal"
-		>,
-		args: Record<string, unknown>,
-	) => Promise<T>;
-};
-
+/**
+ * Write collected users to the DB in batches of 50.
+ */
 const writeUsers = async (ctx: ActionCtx, users: Array<CollectedUser>) => {
 	for (let i = 0; i < users.length; i += 50) {
 		await ctx.runMutation(internal.rpc.bootstrapWrite.upsertUsers, {
@@ -115,6 +144,17 @@ const writeUsers = async (ctx: ActionCtx, users: Array<CollectedUser>) => {
 };
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Number of GitHub API pages to process per chunk action.
+ * Each page has up to 100 items. 10 pages = up to 1000 items per chunk.
+ * This keeps each action well within the 10-minute Convex timeout.
+ */
+const PAGES_PER_CHUNK = 10;
+
+// ---------------------------------------------------------------------------
 // Step 1: Fetch branches
 // ---------------------------------------------------------------------------
 
@@ -122,10 +162,13 @@ export const fetchBranches = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
+		connectedByUserId: v.string(),
 	},
 	returns: v.object({ count: v.number() }),
 	handler: async (ctx, args): Promise<{ count: number }> => {
 		const rawBranches = await runWithGitHub(
+			ctx,
+			args.connectedByUserId,
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
 				return yield* gh.use(async (fetch) => {
@@ -164,59 +207,43 @@ export const fetchBranches = internalAction({
 });
 
 // ---------------------------------------------------------------------------
-// Step 2: Fetch pull requests (paginated)
+// Step 2: Fetch pull requests CHUNK (paginated — processes PAGES_PER_CHUNK
+// pages then returns cursor for next chunk)
 // ---------------------------------------------------------------------------
 
-export const fetchPullRequests = internalAction({
+export const fetchPullRequestsChunk = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
+		/** The GitHub API URL for this chunk, or null to start from page 1. */
+		cursor: v.union(v.string(), v.null()),
+		connectedByUserId: v.string(),
 	},
 	returns: v.object({
 		count: v.number(),
-		openPrSyncTargets: v.array(
-			v.object({
-				pullRequestNumber: v.number(),
-				headSha: v.string(),
-			}),
-		),
+		/** The next GitHub API URL, or null if all pages exhausted. */
+		nextCursor: v.union(v.string(), v.null()),
 	}),
 	handler: async (
 		ctx,
 		args,
 	): Promise<{
 		count: number;
-		openPrSyncTargets: Array<{
-			pullRequestNumber: number;
-			headSha: string;
-		}>;
+		nextCursor: string | null;
 	}> => {
-		// Stream page-by-page to avoid OOM on large repos (e.g. oven-sh/bun
-		// has 14k+ PRs). Each page is transformed, written to the DB, and
-		// discarded before fetching the next page.
 		const { collectUser, getUsers } = createUserCollector();
 		let totalCount = 0;
-		const openPrSyncTargets: Array<{
-			pullRequestNumber: number;
-			headSha: string;
-		}> = [];
 
-		// We use a plain async loop so we can interleave GitHub fetches
-		// (via Effect) with Convex mutation writes (via ctx.runMutation).
-		// Resolve the GitHubApiClient service once, then reuse its .use()
-		// method for each page — avoids re-creating the token layer each time.
-		const gh = await runWithGitHub(
-			Effect.gen(function* () {
-				return yield* GitHubApiClient;
-			}),
-		);
+		const gh = await resolveGitHubClient(ctx, args.connectedByUserId);
 
 		let url: string | null =
-			`/repos/${args.fullName}/pulls?state=all&per_page=100`;
+			args.cursor ?? `/repos/${args.fullName}/pulls?state=all&per_page=100`;
 
-		while (url) {
-			// Fetch one page — gh.use() returns Effect<A, Error, never>
-			// so we can run it directly without providing a layer.
+		let pagesProcessed = 0;
+		let nextCursor: string | null = null;
+
+		while (url && pagesProcessed < PAGES_PER_CHUNK) {
+			// Fetch one page
 			const { page, nextUrl } = await Effect.runPromise(
 				gh
 					.use(async (fetch) => {
@@ -268,65 +295,62 @@ export const fetchPullRequests = internalAction({
 			});
 
 			// Write this page's PRs to the DB immediately (batches of 50).
-			// skipProjections=true avoids expensive full-table projection
-			// rebuilds during bulk import — projections are rebuilt once
-			// at the end of the workflow via onBootstrapComplete.
 			for (let i = 0; i < pullRequests.length; i += 50) {
 				await ctx.runMutation(internal.rpc.bootstrapWrite.upsertPullRequests, {
 					repositoryId: args.repositoryId,
 					pullRequests: pullRequests.slice(i, i + 50),
-					skipProjections: true,
 				});
 			}
 
-			// Track open PRs for file sync (only open PRs, small list)
-			for (const pr of pullRequests) {
-				if (pr.state === "open" && pr.headSha !== "") {
-					openPrSyncTargets.push({
-						pullRequestNumber: pr.number,
-						headSha: pr.headSha,
-					});
-				}
-			}
-
 			totalCount += pullRequests.length;
+			pagesProcessed++;
+			nextCursor = nextUrl;
 			url = nextUrl;
 		}
 
-		// Write collected users (accumulated across all pages, but these are
-		// much smaller — one entry per unique user)
+		// Write collected users (accumulated across pages in this chunk)
 		await writeUsers(ctx, getUsers());
 
-		return { count: totalCount, openPrSyncTargets };
+		return { count: totalCount, nextCursor };
 	},
 });
 
 // ---------------------------------------------------------------------------
-// Step 3: Fetch issues (paginated, excludes PRs)
+// Step 3: Fetch issues CHUNK (paginated — same chunking strategy as PRs)
 // ---------------------------------------------------------------------------
 
-export const fetchIssues = internalAction({
+export const fetchIssuesChunk = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
+		/** The GitHub API URL for this chunk, or null to start from page 1. */
+		cursor: v.union(v.string(), v.null()),
+		connectedByUserId: v.string(),
 	},
-	returns: v.object({ count: v.number() }),
-	handler: async (ctx, args): Promise<{ count: number }> => {
-		// Stream page-by-page to avoid OOM on large repos (e.g. oven-sh/bun
-		// has 10k+ issues). Each page is transformed, written, and discarded.
+	returns: v.object({
+		count: v.number(),
+		/** The next GitHub API URL, or null if all pages exhausted. */
+		nextCursor: v.union(v.string(), v.null()),
+	}),
+	handler: async (
+		ctx,
+		args,
+	): Promise<{
+		count: number;
+		nextCursor: string | null;
+	}> => {
 		const { collectUser, getUsers } = createUserCollector();
 		let totalCount = 0;
 
-		const gh = await runWithGitHub(
-			Effect.gen(function* () {
-				return yield* GitHubApiClient;
-			}),
-		);
+		const gh = await resolveGitHubClient(ctx, args.connectedByUserId);
 
 		let url: string | null =
-			`/repos/${args.fullName}/issues?state=all&per_page=100`;
+			args.cursor ?? `/repos/${args.fullName}/issues?state=all&per_page=100`;
 
-		while (url) {
+		let pagesProcessed = 0;
+		let nextCursor: string | null = null;
+
+		while (url && pagesProcessed < PAGES_PER_CHUNK) {
 			// Fetch one page
 			const { page, nextUrl } = await Effect.runPromise(
 				gh
@@ -383,23 +407,23 @@ export const fetchIssues = internalAction({
 				});
 
 			// Write this page's issues to the DB immediately.
-			// skipProjections=true — projections rebuilt at end of workflow.
 			for (let i = 0; i < issues.length; i += 50) {
 				await ctx.runMutation(internal.rpc.bootstrapWrite.upsertIssues, {
 					repositoryId: args.repositoryId,
 					issues: issues.slice(i, i + 50),
-					skipProjections: true,
 				});
 			}
 
 			totalCount += issues.length;
+			pagesProcessed++;
+			nextCursor = nextUrl;
 			url = nextUrl;
 		}
 
 		// Write collected users
 		await writeUsers(ctx, getUsers());
 
-		return { count: totalCount };
+		return { count: totalCount, nextCursor };
 	},
 });
 
@@ -411,12 +435,15 @@ export const fetchCommits = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
+		connectedByUserId: v.string(),
 	},
 	returns: v.object({ count: v.number() }),
 	handler: async (ctx, args): Promise<{ count: number }> => {
 		const { collectUser, getUsers } = createUserCollector();
 
 		const allCommits = await runWithGitHub(
+			ctx,
+			args.connectedByUserId,
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
 				return yield* gh.use(async (fetch) => {
@@ -482,6 +509,9 @@ export const fetchCommits = internalAction({
 
 // ---------------------------------------------------------------------------
 // Step 5: Fetch check runs for active PR head SHAs
+//
+// Reads open PRs from the DB (written by fetchPullRequestsChunk) rather
+// than accepting them via the workflow journal.
 // ---------------------------------------------------------------------------
 
 export const fetchCheckRuns = internalAction({
@@ -489,10 +519,13 @@ export const fetchCheckRuns = internalAction({
 		repositoryId: v.number(),
 		fullName: v.string(),
 		headShas: v.array(v.string()),
+		connectedByUserId: v.string(),
 	},
 	returns: v.object({ count: v.number() }),
 	handler: async (ctx, args): Promise<{ count: number }> => {
 		const allCheckRuns = await runWithGitHub(
+			ctx,
+			args.connectedByUserId,
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
 				const results: Array<{
@@ -588,6 +621,7 @@ export const fetchWorkflowRuns = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
+		connectedByUserId: v.string(),
 	},
 	returns: v.object({
 		runCount: v.number(),
@@ -600,6 +634,8 @@ export const fetchWorkflowRuns = internalAction({
 		const { collectUser, getUsers } = createUserCollector();
 
 		const { workflowRuns, workflowJobs } = await runWithGitHub(
+			ctx,
+			args.connectedByUserId,
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
 
@@ -772,7 +808,7 @@ export const fetchWorkflowRuns = internalAction({
 });
 
 // ---------------------------------------------------------------------------
-// Step 7: Schedule PR file syncs
+// Step 7: Read open PRs from DB and schedule PR file syncs
 // ---------------------------------------------------------------------------
 
 export const schedulePrFileSyncs = internalAction({
@@ -785,6 +821,7 @@ export const schedulePrFileSyncs = internalAction({
 				headSha: v.string(),
 			}),
 		),
+		connectedByUserId: v.string(),
 	},
 	returns: v.object({ scheduled: v.number() }),
 	handler: async (ctx, args): Promise<{ scheduled: number }> => {
@@ -798,9 +835,39 @@ export const schedulePrFileSyncs = internalAction({
 				repositoryId: args.repositoryId,
 				pullRequestNumber: pr.pullRequestNumber,
 				headSha: pr.headSha,
+				connectedByUserId: args.connectedByUserId,
 			});
 		}
 
 		return { scheduled: args.openPrSyncTargets.length };
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Helper action: read open PR sync targets from the DB.
+// Called by the workflow to get headShas for check-runs and file-sync steps.
+// ---------------------------------------------------------------------------
+
+export const getOpenPrSyncTargets = internalAction({
+	args: {
+		repositoryId: v.number(),
+		connectedByUserId: v.string(),
+	},
+	returns: v.array(
+		v.object({
+			pullRequestNumber: v.number(),
+			headSha: v.string(),
+		}),
+	),
+	handler: async (
+		ctx,
+		args,
+	): Promise<Array<{ pullRequestNumber: number; headSha: string }>> => {
+		// Query open PRs from the database (they were written by fetchPullRequestsChunk)
+		const openPrs = await ctx.runQuery(
+			internal.rpc.bootstrapWorkflow.queryOpenPrSyncTargets,
+			{ repositoryId: args.repositoryId },
+		);
+		return openPrs;
 	},
 });

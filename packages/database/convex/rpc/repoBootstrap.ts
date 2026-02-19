@@ -32,6 +32,8 @@ export const bootstrapRepoDef = factory.internalAction({
 		githubRepoId: Schema.Number,
 		fullName: Schema.String,
 		lockKey: Schema.String,
+		/** better-auth user ID whose GitHub OAuth token should be used. */
+		connectedByUserId: Schema.String,
 	},
 	success: Schema.Struct({
 		branches: Schema.Number,

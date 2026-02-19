@@ -11,13 +11,14 @@ import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
 import { Card, CardContent, CardHeader } from "@packages/ui/components/card";
 import { Separator } from "@packages/ui/components/separator";
+import { Skeleton } from "@packages/ui/components/skeleton";
 import { Textarea } from "@packages/ui/components/textarea";
 import { cn } from "@packages/ui/lib/utils";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { PatchDiff } from "@pierre/diffs/react";
 import { ChevronDown, ExternalLink } from "lucide-react";
-import { useId, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { MarkdownBody } from "@/components/markdown-body";
 
 type PrDetail = {
@@ -112,6 +113,25 @@ export function PrDetailClient({
 	const pr = useSubscriptionWithInitial(prAtom, initialPr);
 	const filesData = useSubscriptionWithInitial(filesAtom, initialFiles);
 
+	// On-demand file sync: if no files are cached, request a background sync once
+	const [, requestFileSync] = useAtom(client.requestPrFileSync.mutate);
+	const [fileSyncRequested, setFileSyncRequested] = useState(false);
+	useEffect(() => {
+		if (filesData.files.length === 0 && pr !== null && !fileSyncRequested) {
+			setFileSyncRequested(true);
+			requestFileSync({ ownerLogin: owner, name, number: prNumber });
+		}
+	}, [
+		filesData.files.length,
+		pr,
+		owner,
+		name,
+		prNumber,
+		requestFileSync,
+		fileSyncRequested,
+	]);
+	const isSyncingFiles = fileSyncRequested && filesData.files.length === 0;
+
 	if (pr === null) {
 		return (
 			<div className="py-8 text-center">
@@ -128,6 +148,7 @@ export function PrDetailClient({
 				<DiffPanel
 					pr={pr}
 					filesData={filesData}
+					isSyncingFiles={isSyncingFiles}
 					owner={owner}
 					name={name}
 					prNumber={prNumber}
@@ -149,12 +170,14 @@ export function PrDetailClient({
 function DiffPanel({
 	pr,
 	filesData,
+	isSyncingFiles,
 	owner,
 	name,
 	prNumber,
 }: {
 	pr: PrDetail;
 	filesData: FilesData;
+	isSyncingFiles: boolean;
 	owner: string;
 	name: string;
 	prNumber: number;
@@ -265,7 +288,22 @@ function DiffPanel({
 				</div>
 			)}
 
-			{files.length === 0 && (
+			{files.length === 0 && isSyncingFiles && (
+				<div className="space-y-3">
+					<div className="flex items-center gap-2 text-xs text-muted-foreground">
+						<div className="size-3.5 rounded-full border-2 border-muted-foreground border-t-transparent animate-spin" />
+						<span>Loading file changes...</span>
+					</div>
+					{[1, 2, 3].map((i) => (
+						<div key={i}>
+							<Skeleton className="h-8 w-full rounded-t-md rounded-b-none" />
+							<Skeleton className="h-24 w-full rounded-t-none rounded-b-md" />
+						</div>
+					))}
+				</div>
+			)}
+
+			{files.length === 0 && !isSyncingFiles && (
 				<p className="py-8 text-center text-xs text-muted-foreground">
 					No file changes synced yet.
 				</p>

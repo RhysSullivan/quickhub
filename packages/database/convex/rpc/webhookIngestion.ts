@@ -1,6 +1,7 @@
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
 import { Effect, Option, Schema } from "effect";
 import { ConfectMutationCtx, confectSchema } from "../confect";
+import { syncWebhookInsert } from "../shared/aggregateSync";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -42,7 +43,7 @@ storeRawEventDef.implement((args) =>
 			return { stored: false, deliveryId: args.deliveryId };
 		}
 
-		yield* ctx.db.insert("github_webhook_events_raw", {
+		const id = yield* ctx.db.insert("github_webhook_events_raw", {
 			deliveryId: args.deliveryId,
 			eventName: args.eventName,
 			action: args.action,
@@ -56,6 +57,12 @@ storeRawEventDef.implement((args) =>
 			processAttempts: 0,
 			nextRetryAt: null,
 		});
+
+		// Sync webhooksByState aggregate
+		const inserted = yield* ctx.db.get(id);
+		if (Option.isSome(inserted)) {
+			yield* syncWebhookInsert(ctx.rawCtx, inserted.value);
+		}
 
 		return { stored: true, deliveryId: args.deliveryId };
 	}),

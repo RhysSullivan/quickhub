@@ -277,10 +277,17 @@ reconcileRepoDef.implement((args) =>
 		});
 
 		// Start durable bootstrap workflow to re-fetch everything (idempotent upserts)
+		// Requires a connected user whose GitHub token can be used for API calls.
+		const connectedByUserId = repoDoc.connectedByUserId;
+		if (!connectedByUserId) {
+			return { scheduled: false, lockKey };
+		}
+
 		yield* ctx.runMutation(internal.rpc.bootstrapWorkflow.startBootstrap, {
 			repositoryId: repoDoc.githubRepoId,
 			fullName: repoDoc.fullName,
 			lockKey,
+			connectedByUserId,
 		});
 
 		return { scheduled: true, lockKey };

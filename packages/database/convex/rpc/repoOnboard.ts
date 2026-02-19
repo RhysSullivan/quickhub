@@ -25,6 +25,10 @@ import {
 	GitHubApiError,
 	GitHubRateLimitError,
 } from "../shared/githubApi";
+import {
+	lookupGitHubTokenByUserIdConfect,
+	NoGitHubTokenError,
+} from "../shared/githubToken";
 import { updateRepoOverview } from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
@@ -51,6 +55,11 @@ class AlreadyConnected extends Schema.TaggedError<AlreadyConnected>()(
 class WebhookSetupFailed extends Schema.TaggedError<WebhookSetupFailed>()(
 	"WebhookSetupFailed",
 	{ fullName: Schema.String, reason: Schema.String },
+) {}
+
+class NotAuthenticated extends Schema.TaggedError<NotAuthenticated>()(
+	"NotAuthenticated",
+	{ reason: Schema.String },
 ) {}
 
 // ---------------------------------------------------------------------------
@@ -116,6 +125,8 @@ const insertRepoAndBootstrapDef = factory.internalMutation({
 		visibility: Schema.Literal("public", "private", "internal"),
 		isPrivate: Schema.Boolean,
 		webhookSetup: Schema.Boolean,
+		/** The better-auth user ID of whoever connected this repo (null if no admin perms). */
+		connectedByUserId: Schema.NullOr(Schema.String),
 	},
 	success: Schema.Struct({
 		repositoryId: Schema.Number,
@@ -170,6 +181,7 @@ insertRepoAndBootstrapDef.implement((args) =>
 			pushedAt: null,
 			githubUpdatedAt: now,
 			cachedAt: now,
+			connectedByUserId: args.connectedByUserId,
 		});
 
 		// Create sync job
@@ -199,12 +211,15 @@ insertRepoAndBootstrapDef.implement((args) =>
 				updatedAt: now,
 			});
 
-			// Start durable bootstrap workflow
-			yield* ctx.runMutation(internal.rpc.bootstrapWorkflow.startBootstrap, {
-				repositoryId: args.githubRepoId,
-				fullName: args.fullName,
-				lockKey,
-			});
+			// Start durable bootstrap workflow (only if we have a connected user)
+			if (args.connectedByUserId !== null) {
+				yield* ctx.runMutation(internal.rpc.bootstrapWorkflow.startBootstrap, {
+					repositoryId: args.githubRepoId,
+					fullName: args.fullName,
+					lockKey,
+					connectedByUserId: args.connectedByUserId,
+				});
+			}
 			bootstrapScheduled = true;
 		}
 
@@ -262,13 +277,28 @@ const addRepoByUrlDef = factory.action({
 		RepoNotFound,
 		AlreadyConnected,
 		WebhookSetupFailed,
+		NotAuthenticated,
 	),
 });
 
 addRepoByUrlDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
-		const gh = yield* GitHubApiClient;
+
+		// 0. Resolve the signed-in user's GitHub OAuth token
+		const identity = yield* ctx.auth.getUserIdentity();
+		if (Option.isNone(identity)) {
+			return yield* new NotAuthenticated({ reason: "User is not signed in" });
+		}
+		const userId = identity.value.subject;
+		const token = yield* lookupGitHubTokenByUserIdConfect(
+			ctx.runQuery,
+			userId,
+		).pipe(Effect.mapError((e) => new NotAuthenticated({ reason: e.reason })));
+		const gh = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(token),
+		);
 
 		// 1. Parse URL → owner/name
 		const fullName = parseRepoFullName(args.url);
@@ -435,6 +465,7 @@ addRepoByUrlDef.implement((args) =>
 				visibility,
 				isPrivate,
 				webhookSetup: webhookCreated,
+				connectedByUserId: hasAdmin ? userId : null,
 			},
 		);
 
@@ -452,7 +483,7 @@ addRepoByUrlDef.implement((args) =>
 			webhookCreated,
 			bootstrapScheduled: decoded.bootstrapScheduled,
 		};
-	}).pipe(Effect.provide(GitHubApiClient.Live)),
+	}),
 );
 
 // ---------------------------------------------------------------------------
@@ -476,5 +507,6 @@ export {
 	RepoNotFound,
 	AlreadyConnected,
 	WebhookSetupFailed,
+	NotAuthenticated,
 };
 export type RepoOnboardModule = typeof repoOnboardModule;

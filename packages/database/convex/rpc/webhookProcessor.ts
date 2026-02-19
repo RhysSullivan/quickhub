@@ -3,6 +3,24 @@ import { Effect, Match, Option, Schema } from "effect";
 import { internal } from "../_generated/api";
 import { ConfectMutationCtx, ConfectQueryCtx, confectSchema } from "../confect";
 import {
+	syncCheckRunInsert,
+	syncCheckRunReplace,
+	syncCommentDelete,
+	syncCommentInsert,
+	syncCommentReplace,
+	syncIssueInsert,
+	syncIssueReplace,
+	syncJobInsert,
+	syncJobReplace,
+	syncPrInsert,
+	syncPrReplace,
+	syncReviewInsert,
+	syncReviewReplace,
+	syncWebhookDelete,
+	syncWebhookReplace,
+} from "../shared/aggregateSync";
+import { webhooksByState } from "../shared/aggregates";
+import {
 	appendActivityFeedEntry,
 	updateAllProjections,
 } from "../shared/projections";
@@ -169,9 +187,17 @@ const handleIssuesEvent = (
 		if (Option.isSome(existing)) {
 			if (githubUpdatedAt >= existing.value.githubUpdatedAt) {
 				yield* ctx.db.patch(existing.value._id, data);
+				const updated = yield* ctx.db.get(existing.value._id);
+				if (Option.isSome(updated)) {
+					yield* syncIssueReplace(ctx.rawCtx, existing.value, updated.value);
+				}
 			}
 		} else {
-			yield* ctx.db.insert("github_issues", data);
+			const id = yield* ctx.db.insert("github_issues", data);
+			const inserted = yield* ctx.db.get(id);
+			if (Option.isSome(inserted)) {
+				yield* syncIssueInsert(ctx.rawCtx, inserted.value);
+			}
 		}
 	});
 
@@ -251,9 +277,17 @@ const handlePullRequestEvent = (
 		if (Option.isSome(existing)) {
 			if (githubUpdatedAt >= existing.value.githubUpdatedAt) {
 				yield* ctx.db.patch(existing.value._id, data);
+				const updated = yield* ctx.db.get(existing.value._id);
+				if (Option.isSome(updated)) {
+					yield* syncPrReplace(ctx.rawCtx, existing.value, updated.value);
+				}
 			}
 		} else {
-			yield* ctx.db.insert("github_pull_requests", data);
+			const id = yield* ctx.db.insert("github_pull_requests", data);
+			const inserted = yield* ctx.db.get(id);
+			if (Option.isSome(inserted)) {
+				yield* syncPrInsert(ctx.rawCtx, inserted.value);
+			}
 		}
 	});
 
@@ -290,6 +324,7 @@ const handleIssueCommentEvent = (
 				)
 				.first();
 			if (Option.isSome(existing)) {
+				yield* syncCommentDelete(ctx.rawCtx, existing.value);
 				yield* ctx.db.delete(existing.value._id);
 			}
 			return;
@@ -317,8 +352,16 @@ const handleIssueCommentEvent = (
 
 		if (Option.isSome(existing)) {
 			yield* ctx.db.patch(existing.value._id, data);
+			const updated = yield* ctx.db.get(existing.value._id);
+			if (Option.isSome(updated)) {
+				yield* syncCommentReplace(ctx.rawCtx, existing.value, updated.value);
+			}
 		} else {
-			yield* ctx.db.insert("github_issue_comments", data);
+			const id = yield* ctx.db.insert("github_issue_comments", data);
+			const inserted = yield* ctx.db.get(id);
+			if (Option.isSome(inserted)) {
+				yield* syncCommentInsert(ctx.rawCtx, inserted.value);
+			}
 		}
 	});
 
@@ -465,8 +508,16 @@ const handlePullRequestReviewEvent = (
 
 		if (Option.isSome(existing)) {
 			yield* ctx.db.patch(existing.value._id, data);
+			const updated = yield* ctx.db.get(existing.value._id);
+			if (Option.isSome(updated)) {
+				yield* syncReviewReplace(ctx.rawCtx, existing.value, updated.value);
+			}
 		} else {
-			yield* ctx.db.insert("github_pull_request_reviews", data);
+			const id = yield* ctx.db.insert("github_pull_request_reviews", data);
+			const inserted = yield* ctx.db.get(id);
+			if (Option.isSome(inserted)) {
+				yield* syncReviewInsert(ctx.rawCtx, inserted.value);
+			}
 		}
 	});
 
@@ -544,8 +595,16 @@ const handleCheckRunEvent = (
 
 		if (Option.isSome(existing)) {
 			yield* ctx.db.patch(existing.value._id, data);
+			const updated = yield* ctx.db.get(existing.value._id);
+			if (Option.isSome(updated)) {
+				yield* syncCheckRunReplace(ctx.rawCtx, existing.value, updated.value);
+			}
 		} else {
-			yield* ctx.db.insert("github_check_runs", data);
+			const id = yield* ctx.db.insert("github_check_runs", data);
+			const inserted = yield* ctx.db.get(id);
+			if (Option.isSome(inserted)) {
+				yield* syncCheckRunInsert(ctx.rawCtx, inserted.value);
+			}
 		}
 	});
 
@@ -648,8 +707,16 @@ const handleWorkflowJobEvent = (
 
 		if (Option.isSome(existing)) {
 			yield* ctx.db.patch(existing.value._id, data);
+			const updated = yield* ctx.db.get(existing.value._id);
+			if (Option.isSome(updated)) {
+				yield* syncJobReplace(ctx.rawCtx, existing.value, updated.value);
+			}
 		} else {
-			yield* ctx.db.insert("github_workflow_jobs", data);
+			const id = yield* ctx.db.insert("github_workflow_jobs", data);
+			const inserted = yield* ctx.db.get(id);
+			if (Option.isSome(inserted)) {
+				yield* syncJobInsert(ctx.rawCtx, inserted.value);
+			}
 		}
 	});
 
@@ -798,6 +865,7 @@ const handleInstallationEvent = (
 						pushedAt: null,
 						githubUpdatedAt: now,
 						cachedAt: now,
+						connectedByUserId: null,
 					});
 				} else {
 					yield* ctx.db.patch(existingRepo.value._id, {
@@ -1252,6 +1320,16 @@ const schedulePrFileSync = (
 		const ownerLogin = parts[0];
 		const name = parts[1];
 
+		// Look up the repo's connectedByUserId for the GitHub token
+		const repoDoc = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_githubRepoId", (q) => q.eq("githubRepoId", repositoryId))
+			.first();
+		const connectedByUserId = Option.isSome(repoDoc)
+			? repoDoc.value.connectedByUserId
+			: null;
+		if (!connectedByUserId) return;
+
 		yield* Effect.promise(() =>
 			ctx.scheduler.runAfter(0, internal.rpc.githubActions.syncPrFiles, {
 				ownerLogin,
@@ -1259,6 +1337,7 @@ const schedulePrFileSync = (
 				repositoryId,
 				pullRequestNumber: prNumber,
 				headSha,
+				connectedByUserId,
 			}),
 		);
 	});
@@ -1369,6 +1448,10 @@ processWebhookEventDef.implement((args) =>
 				);
 			}
 			yield* ctx.db.patch(event._id, { processState: "processed" });
+			const updatedEvent = yield* ctx.db.get(event._id);
+			if (Option.isSome(updatedEvent)) {
+				yield* syncWebhookReplace(ctx.rawCtx, event, updatedEvent.value);
+			}
 			return {
 				processed: true,
 				eventName: event.eventName,
@@ -1394,6 +1477,8 @@ processWebhookEventDef.implement((args) =>
 							payloadJson: event.payloadJson,
 							createdAt: Date.now(),
 						});
+						// Sync aggregate before deleting from table
+						yield* syncWebhookDelete(ctx.rawCtx, event);
 						yield* ctx.db.delete(event._id);
 					} else {
 						// Retry: exponential backoff
@@ -1403,6 +1488,10 @@ processWebhookEventDef.implement((args) =>
 							processAttempts: nextAttempt,
 							nextRetryAt: computeNextRetryAt(nextAttempt),
 						});
+						const updatedEvent = yield* ctx.db.get(event._id);
+						if (Option.isSome(updatedEvent)) {
+							yield* syncWebhookReplace(ctx.rawCtx, event, updatedEvent.value);
+						}
 					}
 					return false;
 				}),
@@ -1414,6 +1503,10 @@ processWebhookEventDef.implement((args) =>
 				processState: "processed",
 				processAttempts: nextAttempt,
 			});
+			const updatedEvent = yield* ctx.db.get(event._id);
+			if (Option.isSome(updatedEvent)) {
+				yield* syncWebhookReplace(ctx.rawCtx, event, updatedEvent.value);
+			}
 			yield* afterSuccessfulProcessing(event, payload, repositoryId);
 		}
 
@@ -1457,6 +1550,10 @@ processAllPendingDef.implement(() =>
 					);
 				}
 				yield* ctx.db.patch(event._id, { processState: "processed" });
+				const updatedEvent = yield* ctx.db.get(event._id);
+				if (Option.isSome(updatedEvent)) {
+					yield* syncWebhookReplace(ctx.rawCtx, event, updatedEvent.value);
+				}
 				processed++;
 				continue;
 			}
@@ -1479,6 +1576,7 @@ processAllPendingDef.implement(() =>
 								payloadJson: event.payloadJson,
 								createdAt: Date.now(),
 							});
+							yield* syncWebhookDelete(ctx.rawCtx, event);
 							yield* ctx.db.delete(event._id);
 							deadLettered++;
 						} else {
@@ -1489,6 +1587,14 @@ processAllPendingDef.implement(() =>
 								processAttempts: nextAttempt,
 								nextRetryAt: computeNextRetryAt(nextAttempt),
 							});
+							const updatedEvent = yield* ctx.db.get(event._id);
+							if (Option.isSome(updatedEvent)) {
+								yield* syncWebhookReplace(
+									ctx.rawCtx,
+									event,
+									updatedEvent.value,
+								);
+							}
 							retried++;
 						}
 						return false;
@@ -1501,6 +1607,10 @@ processAllPendingDef.implement(() =>
 					processState: "processed",
 					processAttempts: nextAttempt,
 				});
+				const updatedEvent = yield* ctx.db.get(event._id);
+				if (Option.isSome(updatedEvent)) {
+					yield* syncWebhookReplace(ctx.rawCtx, event, updatedEvent.value);
+				}
 				yield* afterSuccessfulProcessing(event, payload, repositoryId);
 				processed++;
 			}
@@ -1536,6 +1646,10 @@ promoteRetryEventsDef.implement(() =>
 				processState: "pending",
 				nextRetryAt: null,
 			});
+			const updatedEvent = yield* ctx.db.get(event._id);
+			if (Option.isSome(updatedEvent)) {
+				yield* syncWebhookReplace(ctx.rawCtx, event, updatedEvent.value);
+			}
 			promoted++;
 		}
 
@@ -1552,29 +1666,23 @@ promoteRetryEventsDef.implement(() =>
 getQueueHealthDef.implement(() =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
+		const raw = ctx.rawCtx;
 
-		// Bounded counts — actionable queues (pending/retry/failed) should be small.
-		// Use .take(10001) + cap at 10000 to avoid unbounded reads.
-		const boundedCount = (
-			state: "pending" | "processed" | "failed" | "retry",
-		) =>
-			ctx.db
-				.query("github_webhook_events_raw")
-				.withIndex("by_processState_and_receivedAt", (q) =>
-					q.eq("processState", state),
-				)
-				.take(10001)
-				.pipe(Effect.map((items) => Math.min(items.length, 10000)));
-
-		const pending = yield* boundedCount("pending");
-		const retry = yield* boundedCount("retry");
-		const failed = yield* boundedCount("failed");
+		// O(log n) counts via webhooksByState aggregate
+		const [pending, retry, failed] = yield* Effect.promise(() =>
+			Promise.all([
+				webhooksByState.count(raw, { namespace: "pending" }),
+				webhooksByState.count(raw, { namespace: "retry" }),
+				webhooksByState.count(raw, { namespace: "failed" }),
+			]),
+		);
 
 		const deadLetters = yield* ctx.db
 			.query("github_dead_letters")
 			.take(10001)
 			.pipe(Effect.map((items) => Math.min(items.length, 10000)));
 
+		// Recent processed in last hour — still needs index range query
 		const oneHourAgo = Date.now() - 3_600_000;
 		const recentProcessed = yield* ctx.db
 			.query("github_webhook_events_raw")
