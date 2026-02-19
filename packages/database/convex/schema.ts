@@ -34,6 +34,12 @@ const GitHubSyncJobSchema = Schema.Struct({
 	attemptCount: Schema.Number,
 	nextRunAt: Schema.Number,
 	lastError: Schema.NullOr(Schema.String),
+	/** Human-readable label of the step currently executing (e.g. "Fetching pull requests") */
+	currentStep: Schema.optional(Schema.NullOr(Schema.String)),
+	/** Ordered list of steps that have completed so far */
+	completedSteps: Schema.optional(Schema.Array(Schema.String)),
+	/** Running count of items fetched across all completed steps */
+	itemsFetched: Schema.optional(Schema.Number),
 	createdAt: Schema.Number,
 	updatedAt: Schema.Number,
 });

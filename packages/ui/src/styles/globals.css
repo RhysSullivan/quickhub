@@ -239,6 +239,15 @@ diffs-container table {
 	background-color: var(--accent);
 }
 
+@keyframes shimmer {
+	0% {
+		transform: translateX(-100%);
+	}
+	100% {
+		transform: translateX(400%);
+	}
+}
+
 @keyframes scroll-up {
 	0% {
 		transform: translateY(0);

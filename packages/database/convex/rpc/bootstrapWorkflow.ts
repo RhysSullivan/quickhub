@@ -31,6 +31,7 @@ export const bootstrapRepo = workflow.define({
 	},
 	handler: async (step, args): Promise<void> => {
 		const s = internal.rpc.bootstrapSteps;
+		const progress = internal.rpc.bootstrapWorkflow.updateSyncProgress;
 		const { connectedByUserId } = args;
 
 		// Mark job as running
@@ -41,7 +42,11 @@ export const bootstrapRepo = workflow.define({
 		});
 
 		// Step 1: Fetch branches
-		await step.runAction(
+		await step.runMutation(progress, {
+			lockKey: args.lockKey,
+			currentStep: "Fetching branches",
+		});
+		const branchResult: { count: number } = await step.runAction(
 			s.fetchBranches,
 			{
 				repositoryId: args.repositoryId,
@@ -50,6 +55,12 @@ export const bootstrapRepo = workflow.define({
 			},
 			{ name: "fetch-branches" },
 		);
+		await step.runMutation(progress, {
+			lockKey: args.lockKey,
+			currentStep: null,
+			completedStep: "Branches",
+			itemsInStep: branchResult.count,
+		});
 
 		// Step 2: Fetch pull requests (chunked cursor loop)
 		// Each chunk processes PAGES_PER_CHUNK pages (~1000 items), then returns
@@ -57,6 +68,11 @@ export const bootstrapRepo = workflow.define({
 		{
 			let prCursor: string | null = null;
 			let chunkIndex = 0;
+			let totalPrs = 0;
+			await step.runMutation(progress, {
+				lockKey: args.lockKey,
+				currentStep: "Fetching pull requests",
+			});
 			// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
 			while (true) {
 				const result: { count: number; nextCursor: string | null } =
@@ -70,16 +86,35 @@ export const bootstrapRepo = workflow.define({
 						},
 						{ name: `fetch-prs-${chunkIndex}` },
 					);
+				totalPrs += result.count;
 				prCursor = result.nextCursor;
 				chunkIndex++;
+				if (prCursor !== null) {
+					// Update progress mid-chunk so the UI shows items flowing in
+					await step.runMutation(progress, {
+						lockKey: args.lockKey,
+						currentStep: `Fetching pull requests (${totalPrs} so far)`,
+					});
+				}
 				if (prCursor === null) break;
 			}
+			await step.runMutation(progress, {
+				lockKey: args.lockKey,
+				currentStep: null,
+				completedStep: "Pull requests",
+				itemsInStep: totalPrs,
+			});
 		}
 
 		// Step 3: Fetch issues (chunked cursor loop)
 		{
 			let issueCursor: string | null = null;
 			let chunkIndex = 0;
+			let totalIssues = 0;
+			await step.runMutation(progress, {
+				lockKey: args.lockKey,
+				currentStep: "Fetching issues",
+			});
 			// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
 			while (true) {
 				const result: { count: number; nextCursor: string | null } =
@@ -93,14 +128,31 @@ export const bootstrapRepo = workflow.define({
 						},
 						{ name: `fetch-issues-${chunkIndex}` },
 					);
+				totalIssues += result.count;
 				issueCursor = result.nextCursor;
 				chunkIndex++;
+				if (issueCursor !== null) {
+					await step.runMutation(progress, {
+						lockKey: args.lockKey,
+						currentStep: `Fetching issues (${totalIssues} so far)`,
+					});
+				}
 				if (issueCursor === null) break;
 			}
+			await step.runMutation(progress, {
+				lockKey: args.lockKey,
+				currentStep: null,
+				completedStep: "Issues",
+				itemsInStep: totalIssues,
+			});
 		}
 
 		// Step 4: Fetch recent commits
-		await step.runAction(
+		await step.runMutation(progress, {
+			lockKey: args.lockKey,
+			currentStep: "Fetching commits",
+		});
+		const commitResult: { count: number } = await step.runAction(
 			s.fetchCommits,
 			{
 				repositoryId: args.repositoryId,
@@ -109,9 +161,19 @@ export const bootstrapRepo = workflow.define({
 			},
 			{ name: "fetch-commits" },
 		);
+		await step.runMutation(progress, {
+			lockKey: args.lockKey,
+			currentStep: null,
+			completedStep: "Commits",
+			itemsInStep: commitResult.count,
+		});
 
 		// Step 5: Read open PRs from DB (written by fetchPullRequestsChunk)
 		// and fetch check runs for their head SHAs.
+		await step.runMutation(progress, {
+			lockKey: args.lockKey,
+			currentStep: "Analyzing check runs",
+		});
 		const openPrTargets = await step.runAction(
 			s.getOpenPrSyncTargets,
 			{ repositoryId: args.repositoryId, connectedByUserId },
@@ -135,8 +197,17 @@ export const bootstrapRepo = workflow.define({
 				{ name: "fetch-check-runs" },
 			);
 		}
+		await step.runMutation(progress, {
+			lockKey: args.lockKey,
+			currentStep: null,
+			completedStep: "Check runs",
+		});
 
 		// Step 6: Fetch workflow runs + jobs
+		await step.runMutation(progress, {
+			lockKey: args.lockKey,
+			currentStep: "Fetching CI/CD workflows",
+		});
 		await step.runAction(
 			s.fetchWorkflowRuns,
 			{
@@ -146,9 +217,18 @@ export const bootstrapRepo = workflow.define({
 			},
 			{ name: "fetch-workflow-runs" },
 		);
+		await step.runMutation(progress, {
+			lockKey: args.lockKey,
+			currentStep: null,
+			completedStep: "Workflows",
+		});
 
 		// Step 7: Schedule PR file syncs for open PRs
 		if (openPrTargets.length > 0) {
+			await step.runMutation(progress, {
+				lockKey: args.lockKey,
+				currentStep: "Syncing PR file diffs",
+			});
 			await step.runAction(
 				s.schedulePrFileSyncs,
 				{
@@ -159,6 +239,11 @@ export const bootstrapRepo = workflow.define({
 				},
 				{ name: "schedule-pr-file-syncs" },
 			);
+			await step.runMutation(progress, {
+				lockKey: args.lockKey,
+				currentStep: null,
+				completedStep: "File diffs",
+			});
 		}
 
 		// Mark job as done
@@ -292,6 +377,47 @@ export const markSyncJob = internalMutation({
 			state: args.state,
 			lastError: args.lastError,
 			attemptCount: job.attemptCount + 1,
+			updatedAt: Date.now(),
+		});
+
+		return null;
+	},
+});
+
+// ---------------------------------------------------------------------------
+// Helper mutation: update sync job progress (step tracking)
+//
+// Called by the workflow between steps to surface which step is running
+// and what has completed so far.
+// ---------------------------------------------------------------------------
+
+export const updateSyncProgress = internalMutation({
+	args: {
+		lockKey: v.string(),
+		currentStep: v.union(v.string(), v.null()),
+		completedStep: v.optional(v.string()),
+		itemsInStep: v.optional(v.number()),
+	},
+	returns: v.null(),
+	handler: async (ctx, args): Promise<null> => {
+		const job = await ctx.db
+			.query("github_sync_jobs")
+			.withIndex("by_lockKey", (q) => q.eq("lockKey", args.lockKey))
+			.first();
+
+		if (!job) return null;
+
+		const completedSteps = [...(job.completedSteps ?? [])];
+		if (args.completedStep !== undefined) {
+			completedSteps.push(args.completedStep);
+		}
+
+		const itemsFetched = (job.itemsFetched ?? 0) + (args.itemsInStep ?? 0);
+
+		await ctx.db.patch(job._id, {
+			currentStep: args.currentStep,
+			completedSteps,
+			itemsFetched,
 			updatedAt: Date.now(),
 		});
 

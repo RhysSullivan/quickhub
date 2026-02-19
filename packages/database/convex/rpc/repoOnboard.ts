@@ -207,6 +207,9 @@ insertRepoAndBootstrapDef.implement((args) =>
 				attemptCount: 0,
 				nextRunAt: now,
 				lastError: null,
+				currentStep: null,
+				completedSteps: [],
+				itemsFetched: 0,
 				createdAt: now,
 				updatedAt: now,
 			});

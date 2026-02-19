@@ -326,6 +326,8 @@ function AddRepoFormCompact() {
 					return "Repository is already connected.";
 				case "WebhookSetupFailed":
 					return "Added, but webhook setup failed.";
+				case "NotAuthenticated":
+					return "Please sign in to add a repository.";
 				case "RpcDefectError": {
 					const defect = (e as { defect: unknown }).defect;
 					if (typeof defect === "string" && defect.length > 0) return defect;

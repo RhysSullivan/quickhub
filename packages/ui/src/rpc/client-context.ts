@@ -1,6 +1,7 @@
 "use client";
 
 import { type AnyRpcModule, createRpcClient } from "@packages/confect/rpc";
+import { sharedConvexClientLayer } from "@packages/ui/components/convex-client-provider";
 import {
 	createContext,
 	createElement,
@@ -68,6 +69,7 @@ export const createRpcModuleClientContext = <TModule extends AnyRpcModule>(
 	createRpcClientContext(() =>
 		createRpcClient<TModule>(moduleApi, {
 			url: options.url ?? DEFAULT_CONVEX_URL,
+			layer: sharedConvexClientLayer,
 			enablePayloadTelemetryFallback: ENABLE_PAYLOAD_TELEMETRY_FALLBACK,
 		}),
 	);

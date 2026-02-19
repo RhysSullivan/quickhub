@@ -457,6 +457,31 @@ const getPullRequestDetailDef = factory.query({
 	),
 });
 
+/**
+ * Get bootstrap sync progress for a repository.
+ * Returns the sync job's current step, completed steps, item counts,
+ * and overall state so the UI can render a live progress indicator.
+ *
+ * Returns null if no sync job exists (repo was never synced).
+ */
+const getSyncProgressDef = factory.query({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+	},
+	success: Schema.NullOr(
+		Schema.Struct({
+			state: Schema.Literal("pending", "running", "retry", "done", "failed"),
+			currentStep: Schema.NullOr(Schema.String),
+			completedSteps: Schema.Array(Schema.String),
+			itemsFetched: Schema.Number,
+			lastError: Schema.NullOr(Schema.String),
+			startedAt: Schema.Number,
+			updatedAt: Schema.Number,
+		}),
+	),
+});
+
 // ---------------------------------------------------------------------------
 // Implementations
 // ---------------------------------------------------------------------------
@@ -514,6 +539,45 @@ getRepoOverviewDef.implement((args) =>
 			failingCheckCount: o.failingCheckCount,
 			lastPushAt: o.lastPushAt,
 			updatedAt: o.updatedAt,
+		};
+	}),
+);
+
+getSyncProgressDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectQueryCtx;
+
+		// Look up the repo to get its githubRepoId
+		const repo = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_ownerLogin_and_name", (q) =>
+				q.eq("ownerLogin", args.ownerLogin).eq("name", args.name),
+			)
+			.first();
+
+		if (Option.isNone(repo)) return null;
+
+		const repositoryId = repo.value.githubRepoId;
+		const installationId = repo.value.installationId;
+
+		// Find the bootstrap sync job for this repository
+		const lockKey = `repo-bootstrap:${installationId}:${repositoryId}`;
+		const job = yield* ctx.db
+			.query("github_sync_jobs")
+			.withIndex("by_lockKey", (q) => q.eq("lockKey", lockKey))
+			.first();
+
+		if (Option.isNone(job)) return null;
+
+		const j = job.value;
+		return {
+			state: j.state,
+			currentStep: j.currentStep ?? null,
+			completedSteps: [...(j.completedSteps ?? [])],
+			itemsFetched: j.itemsFetched ?? 0,
+			lastError: j.lastError,
+			startedAt: j.createdAt,
+			updatedAt: j.updatedAt,
 		};
 	}),
 );
@@ -1279,6 +1343,7 @@ const projectionQueriesModule = makeRpcModule(
 	{
 		listRepos: listReposDef,
 		getRepoOverview: getRepoOverviewDef,
+		getSyncProgress: getSyncProgressDef,
 		listPullRequests: listPullRequestsDef,
 		listIssues: listIssuesDef,
 		listActivity: listActivityDef,
@@ -1299,6 +1364,7 @@ const projectionQueriesModule = makeRpcModule(
 export const {
 	listRepos,
 	getRepoOverview,
+	getSyncProgress,
 	listPullRequests,
 	listIssues,
 	listActivity,
