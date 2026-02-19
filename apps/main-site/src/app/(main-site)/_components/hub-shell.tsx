@@ -1,5 +1,6 @@
 "use client";
 
+import { KeyboardShortcutsDialog } from "@packages/ui/components/keyboard-shortcuts-dialog";
 import { Link } from "@packages/ui/components/link";
 import {
 	ResizableHandle,
@@ -58,6 +59,8 @@ export function HubShell({
 					<MobileView sidebar={sidebar} detail={detail} />
 				</Suspense>
 			</div>
+
+			<KeyboardShortcutsDialog />
 		</div>
 	);
 }

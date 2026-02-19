@@ -169,7 +169,7 @@ export const bootstrapRepo = workflow.define({
 		});
 
 		// Step 5: Read open PRs from DB (written by fetchPullRequestsChunk)
-		// and fetch check runs for their head SHAs.
+		// and fetch check runs for their head SHAs in chunks.
 		await step.runMutation(progress, {
 			lockKey: args.lockKey,
 			currentStep: "Analyzing check runs",
@@ -185,17 +185,31 @@ export const bootstrapRepo = workflow.define({
 		);
 		const uniqueShas = [...new Set(activePrHeadShas)];
 
-		if (uniqueShas.length > 0) {
-			await step.runAction(
-				s.fetchCheckRuns,
-				{
-					repositoryId: args.repositoryId,
-					fullName: args.fullName,
-					headShas: uniqueShas,
-					connectedByUserId,
-				},
-				{ name: "fetch-check-runs" },
-			);
+		// Process check runs in chunks of 100 SHAs to stay within action timeout
+		{
+			const CHECK_RUN_CHUNK_SIZE = 100;
+			let totalCheckRuns = 0;
+			for (let i = 0; i < uniqueShas.length; i += CHECK_RUN_CHUNK_SIZE) {
+				const shaChunk = uniqueShas.slice(i, i + CHECK_RUN_CHUNK_SIZE);
+				const chunkIdx = Math.floor(i / CHECK_RUN_CHUNK_SIZE);
+				const result: { count: number } = await step.runAction(
+					s.fetchCheckRunsChunk,
+					{
+						repositoryId: args.repositoryId,
+						fullName: args.fullName,
+						headShas: shaChunk,
+						connectedByUserId,
+					},
+					{ name: `fetch-check-runs-${chunkIdx}` },
+				);
+				totalCheckRuns += result.count;
+				if (i + CHECK_RUN_CHUNK_SIZE < uniqueShas.length) {
+					await step.runMutation(progress, {
+						lockKey: args.lockKey,
+						currentStep: `Analyzing check runs (${totalCheckRuns} found, ${Math.min(i + CHECK_RUN_CHUNK_SIZE, uniqueShas.length)}/${uniqueShas.length} PRs)`,
+					});
+				}
+			}
 		}
 		await step.runMutation(progress, {
 			lockKey: args.lockKey,

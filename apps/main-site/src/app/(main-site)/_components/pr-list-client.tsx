@@ -6,8 +6,9 @@ import { Link } from "@packages/ui/components/link";
 import { useInfinitePaginationWithInitial } from "@packages/ui/hooks/use-paginated-atom";
 import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
+import { useHotkey } from "@tanstack/react-hotkeys";
 import { Loader2, MessageCircle } from "lucide-react";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 const PAGE_SIZE = 30;
@@ -58,10 +59,48 @@ export function PrListClient({
 	} = useInfinitePaginationWithInitial(paginatedAtom, initialData);
 
 	const pathname = usePathname();
+	const router = useRouter();
 	const activeNumber = (() => {
 		const match = /\/pulls\/(\d+)/.exec(pathname);
 		return match?.[1] ? Number.parseInt(match[1], 10) : null;
 	})();
+
+	// Find the index of the currently active PR for j/k navigation
+	const activeIndex = prs.findIndex((pr) => pr.number === activeNumber);
+
+	// j — open next PR (matches GitHub issue/PR list navigation)
+	useHotkey("J", (e) => {
+		e.preventDefault();
+		if (prs.length === 0) return;
+		const nextIndex =
+			activeIndex === -1 ? 0 : Math.min(activeIndex + 1, prs.length - 1);
+		const pr = prs[nextIndex];
+		if (pr) {
+			router.push(`/${owner}/${name}/pulls/${pr.number}`);
+		}
+	});
+
+	// k — open previous PR (matches GitHub issue/PR list navigation)
+	useHotkey("K", (e) => {
+		e.preventDefault();
+		if (prs.length === 0) return;
+		const nextIndex = activeIndex === -1 ? 0 : Math.max(activeIndex - 1, 0);
+		const pr = prs[nextIndex];
+		if (pr) {
+			router.push(`/${owner}/${name}/pulls/${pr.number}`);
+		}
+	});
+
+	// o — also open (for when no PR is active yet, opens the first one)
+	useHotkey("O", (e) => {
+		e.preventDefault();
+		if (prs.length === 0) return;
+		const index = activeIndex === -1 ? 0 : activeIndex;
+		const pr = prs[index];
+		if (pr) {
+			router.push(`/${owner}/${name}/pulls/${pr.number}`);
+		}
+	});
 
 	return (
 		<div className="p-1.5">

@@ -514,7 +514,12 @@ export const fetchCommits = internalAction({
 // than accepting them via the workflow journal.
 // ---------------------------------------------------------------------------
 
-export const fetchCheckRuns = internalAction({
+/**
+ * Fetch check runs for a **chunk** of head SHAs. The workflow calls this
+ * in a loop, passing ~100 SHAs per chunk, so each action stays well within
+ * the Convex 10-minute timeout.
+ */
+export const fetchCheckRunsChunk = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),

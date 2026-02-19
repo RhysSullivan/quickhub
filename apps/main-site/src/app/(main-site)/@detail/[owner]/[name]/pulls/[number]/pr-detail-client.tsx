@@ -260,8 +260,8 @@ function DiffPanel({
 					</h2>
 					{filePatchEntries.length > 0 && (
 						<div className="space-y-2">
-							{filePatchEntries.map((entry) => (
-								<div key={entry.filename} className="min-w-0">
+							{filePatchEntries.map((entry, index) => (
+								<div key={entry.filename} className="min-w-0 rounded-md">
 									<div className="flex items-center gap-2 px-2 py-1 bg-muted/50 rounded-t-md border border-b-0 text-[10px]">
 										<FileStatusBadge status={entry.status} />
 										<span className="font-mono font-medium truncate min-w-0">
