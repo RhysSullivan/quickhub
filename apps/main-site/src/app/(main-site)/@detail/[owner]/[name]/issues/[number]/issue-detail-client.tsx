@@ -16,7 +16,7 @@ import { cn } from "@packages/ui/lib/utils";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { CheckCircle2, CircleDot } from "lucide-react";
-import { use, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Streamdown } from "streamdown";
 
 type IssueDetail = {
@@ -44,15 +44,13 @@ export function IssueDetailClient({
 	owner,
 	name,
 	issueNumber,
-	initialIssuePromise,
+	initialIssue,
 }: {
 	owner: string;
 	name: string;
 	issueNumber: number;
-	initialIssuePromise: Promise<IssueDetail | null>;
+	initialIssue: IssueDetail | null;
 }) {
-	const initialIssue = use(initialIssuePromise);
-
 	const client = useProjectionQueries();
 	const issueAtom = useMemo(
 		() =>

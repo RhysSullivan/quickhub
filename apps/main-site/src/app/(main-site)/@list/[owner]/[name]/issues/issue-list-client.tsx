@@ -15,7 +15,7 @@ import {
 	TriangleAlert,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { use, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 type IssueItem = {
 	readonly number: number;
@@ -31,13 +31,12 @@ type IssueItem = {
 export function IssueListClient({
 	owner,
 	name,
-	initialDataPromise,
+	initialData = [],
 }: {
 	owner: string;
 	name: string;
-	initialDataPromise: Promise<readonly IssueItem[]>;
+	initialData?: readonly IssueItem[];
 }) {
-	const initialData = use(initialDataPromise);
 	const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">(
 		"open",
 	);

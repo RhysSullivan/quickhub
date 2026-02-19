@@ -19,7 +19,7 @@ import {
 	Loader2,
 	XCircle,
 } from "lucide-react";
-import { use, useMemo } from "react";
+import { useMemo } from "react";
 
 type WorkflowJob = {
 	readonly githubJobId: number;
@@ -55,15 +55,13 @@ export function RunDetailClient({
 	owner,
 	name,
 	runNumber,
-	initialRunPromise,
+	initialRun,
 }: {
 	owner: string;
 	name: string;
 	runNumber: number;
-	initialRunPromise: Promise<WorkflowRunDetail | null>;
+	initialRun: WorkflowRunDetail | null;
 }) {
-	const initialRun = use(initialRunPromise);
-
 	const client = useProjectionQueries();
 	const runAtom = useMemo(
 		() =>

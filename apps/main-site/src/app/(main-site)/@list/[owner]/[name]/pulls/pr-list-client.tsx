@@ -13,7 +13,7 @@ import {
 	TriangleAlert,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { use, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 type PrItem = {
 	readonly number: number;
@@ -33,13 +33,12 @@ type PrItem = {
 export function PrListClient({
 	owner,
 	name,
-	initialDataPromise,
+	initialData = [],
 }: {
 	owner: string;
 	name: string;
-	initialDataPromise: Promise<readonly PrItem[]>;
+	initialData?: readonly PrItem[];
 }) {
-	const initialData = use(initialDataPromise);
 	const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">(
 		"open",
 	);

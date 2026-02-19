@@ -1,7 +1,12 @@
 import { serverQueries } from "@/lib/server-queries";
 import { IssueListClient } from "./issue-list-client";
 
-export default async function IssueListSlot(props: {
+/**
+ * Fallback for the @list slot when navigating directly to /issues/[number].
+ * On soft navigation (clicking a list item), Next.js keeps the existing
+ * rendered page.tsx — this default.tsx is only used for hard navigation.
+ */
+export default async function IssueListDefault(props: {
 	params: Promise<{ owner: string; name: string }>;
 }) {
 	const { owner, name } = await props.params;

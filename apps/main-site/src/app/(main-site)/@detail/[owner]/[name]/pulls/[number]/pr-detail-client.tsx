@@ -16,7 +16,7 @@ import { cn } from "@packages/ui/lib/utils";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { PatchDiff } from "@pierre/diffs/react";
-import { use, useId, useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { Streamdown } from "streamdown";
 
 type PrDetail = {
@@ -77,18 +77,15 @@ export function PrDetailClient({
 	owner,
 	name,
 	prNumber,
-	initialPrPromise,
-	initialFilesPromise,
+	initialPr,
+	initialFiles,
 }: {
 	owner: string;
 	name: string;
 	prNumber: number;
-	initialPrPromise: Promise<PrDetail | null>;
-	initialFilesPromise: Promise<FilesData>;
+	initialPr: PrDetail | null;
+	initialFiles: FilesData;
 }) {
-	const initialPr = use(initialPrPromise);
-	const initialFiles = use(initialFilesPromise);
-
 	const client = useProjectionQueries();
 
 	const prAtom = useMemo(

@@ -15,7 +15,7 @@ import {
 	XCircle,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { use, useMemo } from "react";
+import { useMemo } from "react";
 
 type WorkflowRunItem = {
 	readonly githubRunId: number;
@@ -37,14 +37,12 @@ type WorkflowRunItem = {
 export function ActionsListClient({
 	owner,
 	name,
-	initialDataPromise,
+	initialData = [],
 }: {
 	owner: string;
 	name: string;
-	initialDataPromise: Promise<readonly WorkflowRunItem[]>;
+	initialData?: readonly WorkflowRunItem[];
 }) {
-	const initialData = use(initialDataPromise);
-
 	const client = useProjectionQueries();
 	const runsAtom = useMemo(
 		() =>

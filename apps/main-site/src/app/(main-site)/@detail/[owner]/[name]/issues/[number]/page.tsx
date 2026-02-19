@@ -1,6 +1,4 @@
-import { Suspense } from "react";
 import { serverQueries } from "@/lib/server-queries";
-import { DetailSkeleton } from "../../../../../_components/skeletons";
 import { IssueDetailClient } from "./issue-detail-client";
 
 export default async function IssueDetailSlot(props: {
@@ -10,20 +8,18 @@ export default async function IssueDetailSlot(props: {
 	const { owner, name } = params;
 	const num = Number.parseInt(params.number, 10);
 
-	const issuePromise = serverQueries.getIssueDetail.queryPromise({
+	const initialIssue = await serverQueries.getIssueDetail.queryPromise({
 		ownerLogin: owner,
 		name,
 		number: num,
 	});
 
 	return (
-		<Suspense fallback={<DetailSkeleton />}>
-			<IssueDetailClient
-				owner={owner}
-				name={name}
-				issueNumber={num}
-				initialIssuePromise={issuePromise}
-			/>
-		</Suspense>
+		<IssueDetailClient
+			owner={owner}
+			name={name}
+			issueNumber={num}
+			initialIssue={initialIssue}
+		/>
 	);
 }

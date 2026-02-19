@@ -177,9 +177,15 @@ diffs-container {
 	display: block;
 	min-width: 0;
 	max-width: 100%;
+	overflow-x: auto;
 	/* Let the browser skip rendering for offscreen diffs */
 	content-visibility: auto;
 	contain-intrinsic-size: auto 200px;
+}
+
+/* Diff tables should not force parent to grow */
+diffs-container table {
+	min-width: 0;
 }
 
 /* Prose images and tables should not blow out the container */
