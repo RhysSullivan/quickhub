@@ -157,9 +157,26 @@
 	* {
 		@apply border-border outline-ring/50;
 	}
+	html,
 	body {
-		@apply bg-background text-foreground;
+		@apply bg-background text-foreground overflow-x-hidden;
 	}
+}
+
+/* Ensure diff / code blocks scroll horizontally within their container, not the page */
+[data-streamdown="code-block-body"],
+.diff-viewer,
+pre,
+code {
+	overflow-x: auto;
+	max-width: 100%;
+}
+
+/* Prose images and tables should not blow out the container */
+.prose img,
+.prose table {
+	max-width: 100%;
+	overflow-x: auto;
 }
 
 @keyframes scroll-up {

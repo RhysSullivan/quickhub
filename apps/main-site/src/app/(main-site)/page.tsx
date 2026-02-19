@@ -28,10 +28,10 @@ export default function HomePage() {
 	const reposResult = useAtomValue(reposAtom);
 
 	return (
-		<main className="mx-auto max-w-4xl px-4 py-12">
-			<div className="mb-8">
-				<h1 className="text-3xl font-bold">QuickHub</h1>
-				<p className="mt-2 text-muted-foreground">
+		<main className="mx-auto max-w-4xl px-3 py-6 sm:px-4 sm:py-12">
+			<div className="mb-6 sm:mb-8">
+				<h1 className="text-2xl sm:text-3xl font-bold">QuickHub</h1>
+				<p className="mt-1.5 sm:mt-2 text-sm sm:text-base text-muted-foreground">
 					GitHub Mirror — Fast reads from Convex
 				</p>
 			</div>
@@ -69,7 +69,7 @@ export default function HomePage() {
 				}
 
 				return (
-					<div className="mt-4 grid gap-4">
+					<div className="mt-4 grid gap-3 sm:gap-4">
 						{repos.map((repo) => (
 							<Link
 								key={repo.repositoryId}
@@ -77,30 +77,28 @@ export default function HomePage() {
 								className="block no-underline"
 							>
 								<Card className="transition-colors hover:border-foreground/20">
-									<CardHeader>
-										<div className="flex items-start justify-between">
-											<div>
-												<CardTitle className="text-lg">
-													{repo.fullName}
-												</CardTitle>
-												<CardDescription className="mt-1">
-													{repo.lastPushAt
-														? `Last push ${formatRelative(repo.lastPushAt)}`
-														: "No pushes yet"}
-												</CardDescription>
-											</div>
+									<CardHeader className="px-3 py-3 sm:px-6 sm:py-4">
+										<div>
+											<CardTitle className="text-base sm:text-lg break-words">
+												{repo.fullName}
+											</CardTitle>
+											<CardDescription className="mt-1 text-xs sm:text-sm">
+												{repo.lastPushAt
+													? `Last push ${formatRelative(repo.lastPushAt)}`
+													: "No pushes yet"}
+											</CardDescription>
 										</div>
-										<div className="mt-3 flex gap-3">
-											<Badge variant="secondary">
+										<div className="mt-2 sm:mt-3 flex flex-wrap gap-1.5 sm:gap-3">
+											<Badge variant="secondary" className="text-xs">
 												{repo.openPrCount} open PR
 												{repo.openPrCount !== 1 ? "s" : ""}
 											</Badge>
-											<Badge variant="secondary">
+											<Badge variant="secondary" className="text-xs">
 												{repo.openIssueCount} open issue
 												{repo.openIssueCount !== 1 ? "s" : ""}
 											</Badge>
 											{repo.failingCheckCount > 0 && (
-												<Badge variant="destructive">
+												<Badge variant="destructive" className="text-xs">
 													{repo.failingCheckCount} failing check
 													{repo.failingCheckCount !== 1 ? "s" : ""}
 												</Badge>
@@ -180,9 +178,9 @@ function AddRepoForm() {
 	})();
 
 	return (
-		<div className="mb-6">
+		<div className="mb-4 sm:mb-6">
 			<form
-				className="flex gap-2"
+				className="flex flex-col sm:flex-row gap-2"
 				onSubmit={(e) => {
 					e.preventDefault();
 					const url = inputRef.current?.value.trim();
@@ -196,7 +194,7 @@ function AddRepoForm() {
 					disabled={isLoading}
 					className="flex-1"
 				/>
-				<Button type="submit" disabled={isLoading}>
+				<Button type="submit" disabled={isLoading} className="sm:w-auto w-full">
 					{isLoading ? "Syncing..." : "Add Repo"}
 				</Button>
 			</form>

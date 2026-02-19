@@ -159,7 +159,7 @@ fetchPrDiffDef.implement((args) =>
 		return diff;
 	}).pipe(
 		Effect.catchAll(() => Effect.succeed(null)),
-		Effect.provide(GitHubApiClient.Default),
+		Effect.provide(GitHubApiClient.Live),
 	),
 );
 
@@ -232,7 +232,7 @@ syncPrFilesDef.implement((args) =>
 		Effect.catchAll(() =>
 			Effect.succeed({ fileCount: 0, truncatedPatches: 0 }),
 		),
-		Effect.provide(GitHubApiClient.Default),
+		Effect.provide(GitHubApiClient.Live),
 	),
 );
 

@@ -13,10 +13,10 @@ import { Card, CardContent, CardHeader } from "@packages/ui/components/card";
 import { Separator } from "@packages/ui/components/separator";
 import { Textarea } from "@packages/ui/components/textarea";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
+import { useOnDemandSync } from "@packages/ui/rpc/on-demand-sync";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { use, useId, useMemo, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Streamdown } from "streamdown";
 
 // ---------------------------------------------------------------------------
 // Types — inferred from the server RPC return types
@@ -88,23 +88,20 @@ export function IssueDetailClient({
 
 	if (issue === null) {
 		return (
-			<>
-				<h1 className="text-2xl font-bold">Issue #{issueNumber}</h1>
-				<p className="mt-2 text-muted-foreground">
-					Issue not found in {owner}/{name}
-				</p>
-			</>
+			<SyncIssueFromGitHub owner={owner} name={name} number={issueNumber} />
 		);
 	}
 
 	return (
 		<>
 			{/* Header */}
-			<div className="flex items-start gap-3">
+			<div className="flex items-start gap-2 sm:gap-3">
 				<IssueStateIcon state={issue.state} />
-				<div>
-					<h1 className="text-2xl font-bold">{issue.title}</h1>
-					<div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+				<div className="min-w-0 flex-1">
+					<h1 className="text-xl sm:text-2xl font-bold break-words">
+						{issue.title}
+					</h1>
+					<div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
 						<span>#{issue.number}</span>
 						<Badge
 							variant={issue.state === "open" ? "default" : "secondary"}
@@ -128,21 +125,25 @@ export function IssueDetailClient({
 								opened {formatRelative(issue.githubUpdatedAt)}
 							</span>
 						)}
-						{issue.labelNames.map((label) => (
-							<Badge key={label} variant="outline" className="text-xs">
-								{label}
-							</Badge>
-						))}
 					</div>
+					{issue.labelNames.length > 0 && (
+						<div className="mt-1.5 flex flex-wrap gap-1.5">
+							{issue.labelNames.map((label) => (
+								<Badge key={label} variant="outline" className="text-xs">
+									{label}
+								</Badge>
+							))}
+						</div>
+					)}
 				</div>
 			</div>
 
 			{/* Body */}
 			{issue.body && (
-				<Card className="mt-6">
-					<CardContent className="pt-6">
-						<div className="prose prose-sm dark:prose-invert max-w-none">
-							<Markdown remarkPlugins={[remarkGfm]}>{issue.body}</Markdown>
+				<Card className="mt-4 sm:mt-6">
+					<CardContent className="px-3 pt-4 sm:px-6 sm:pt-6">
+						<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto">
+							<Streamdown>{issue.body}</Streamdown>
 						</div>
 					</CardContent>
 				</Card>
@@ -159,16 +160,16 @@ export function IssueDetailClient({
 
 			{/* Comments */}
 			{issue.comments.length > 0 && (
-				<div className="mt-8">
-					<h2 className="text-lg font-semibold mb-4">
+				<div className="mt-6 sm:mt-8">
+					<h2 className="text-lg font-semibold mb-3 sm:mb-4">
 						{issue.comments.length} Comment
 						{issue.comments.length !== 1 ? "s" : ""}
 					</h2>
-					<div className="space-y-4">
+					<div className="space-y-3 sm:space-y-4">
 						{issue.comments.map((comment) => (
 							<Card key={comment.githubCommentId}>
-								<CardHeader className="pb-2">
-									<div className="flex items-center gap-2 text-sm">
+								<CardHeader className="px-3 pb-2 sm:px-6">
+									<div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-sm">
 										{comment.authorLogin && (
 											<span className="flex items-center gap-1.5">
 												<Avatar className="size-5">
@@ -184,16 +185,14 @@ export function IssueDetailClient({
 												</span>
 											</span>
 										)}
-										<span className="text-muted-foreground">
-											{formatDate(comment.createdAt)}
+										<span className="text-xs sm:text-sm text-muted-foreground">
+											{formatRelative(comment.createdAt)}
 										</span>
 									</div>
 								</CardHeader>
-								<CardContent>
-									<div className="prose prose-sm dark:prose-invert max-w-none">
-										<Markdown remarkPlugins={[remarkGfm]}>
-											{comment.body}
-										</Markdown>
+								<CardContent className="px-3 sm:px-6">
+									<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto">
+										<Streamdown>{comment.body}</Streamdown>
 									</div>
 								</CardContent>
 							</Card>
@@ -203,11 +202,13 @@ export function IssueDetailClient({
 			)}
 
 			{issue.comments.length === 0 && (
-				<p className="mt-8 text-sm text-muted-foreground">No comments yet.</p>
+				<p className="mt-6 sm:mt-8 text-sm text-muted-foreground">
+					No comments yet.
+				</p>
 			)}
 
 			{/* Comment form */}
-			<Separator className="mt-8" />
+			<Separator className="mt-6 sm:mt-8" />
 			<CommentForm
 				ownerLogin={owner}
 				name={name}
@@ -215,6 +216,63 @@ export function IssueDetailClient({
 				repositoryId={issue.repositoryId}
 			/>
 		</>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Sync from GitHub component — shown when issue is not found locally
+// ---------------------------------------------------------------------------
+
+function SyncIssueFromGitHub({
+	owner,
+	name,
+	number,
+}: {
+	owner: string;
+	name: string;
+	number: number;
+}) {
+	const syncClient = useOnDemandSync();
+	const [syncResult, triggerSync] = useAtom(syncClient.syncIssue.call);
+
+	const isSyncing = Result.isWaiting(syncResult);
+	const hasFailed = Result.isFailure(syncResult);
+	const hasSucceeded = Result.isSuccess(syncResult);
+
+	return (
+		<div>
+			<h1 className="text-2xl font-bold">Issue #{number}</h1>
+			<p className="mt-2 text-muted-foreground">
+				This issue hasn&apos;t been synced yet.
+			</p>
+			<div className="mt-4">
+				{!hasSucceeded && (
+					<Button
+						onClick={() => {
+							triggerSync({
+								ownerLogin: owner,
+								name,
+								number,
+							});
+						}}
+						disabled={isSyncing}
+					>
+						{isSyncing ? "Syncing from GitHub..." : "Sync from GitHub"}
+					</Button>
+				)}
+				{hasSucceeded && (
+					<p className="text-sm text-muted-foreground">
+						Sync complete. Data will appear momentarily...
+					</p>
+				)}
+				{hasFailed && (
+					<p className="mt-2 text-sm text-destructive">
+						Failed to sync from GitHub. The issue may not exist, or the
+						repository may be private.
+					</p>
+				)}
+			</div>
+		</div>
 	);
 }
 
@@ -311,9 +369,9 @@ function IssueActionBar({
 	const isUpdating = Result.isWaiting(stateResult);
 
 	return (
-		<Card className="mt-6">
-			<CardContent className="pt-4">
-				<div className="flex flex-wrap items-center gap-3">
+		<Card className="mt-4 sm:mt-6">
+			<CardContent className="px-3 pt-3 sm:px-6 sm:pt-4">
+				<div className="flex flex-wrap items-center gap-2 sm:gap-3">
 					{state === "open" && (
 						<Button
 							variant="outline"

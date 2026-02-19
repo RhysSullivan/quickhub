@@ -33,13 +33,13 @@ export default async function PullRequestDetailPage(props: {
 	});
 
 	return (
-		<main className="mx-auto max-w-4xl px-4 py-8">
+		<div className="max-w-4xl">
 			<div className="mb-6">
 				<Link
-					href={`/${owner}/${name}`}
+					href={`/${owner}/${name}/pulls`}
 					className="text-sm text-muted-foreground hover:text-foreground"
 				>
-					&larr; {owner}/{name}
+					&larr; Pull Requests
 				</Link>
 			</div>
 
@@ -60,7 +60,7 @@ export default async function PullRequestDetailPage(props: {
 					initialDataPromise={filesPromise}
 				/>
 			</Suspense>
-		</main>
+		</div>
 	);
 }
 

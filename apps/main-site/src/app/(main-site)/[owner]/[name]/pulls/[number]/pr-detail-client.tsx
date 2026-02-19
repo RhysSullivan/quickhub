@@ -13,11 +13,11 @@ import { Card, CardContent, CardHeader } from "@packages/ui/components/card";
 import { Separator } from "@packages/ui/components/separator";
 import { Textarea } from "@packages/ui/components/textarea";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
+import { useOnDemandSync } from "@packages/ui/rpc/on-demand-sync";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { PatchDiff } from "@pierre/diffs/react";
 import { use, useId, useMemo, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { Streamdown } from "streamdown";
 
 // ---------------------------------------------------------------------------
 // Types — inferred from the server RPC return types
@@ -95,23 +95,25 @@ export function PullRequestDetailClient({
 
 	if (pr === null) {
 		return (
-			<>
-				<h1 className="text-2xl font-bold">Pull Request #{prNumber}</h1>
-				<p className="mt-2 text-muted-foreground">
-					Pull request not found in {owner}/{name}
-				</p>
-			</>
+			<SyncFromGitHub
+				owner={owner}
+				name={name}
+				number={prNumber}
+				entityType="pull_request"
+			/>
 		);
 	}
 
 	return (
 		<>
 			{/* Header */}
-			<div className="flex items-start gap-3">
+			<div className="flex items-start gap-2 sm:gap-3">
 				<PrStateIcon state={pr.state} draft={pr.draft} />
-				<div className="min-w-0">
-					<h1 className="text-2xl font-bold">{pr.title}</h1>
-					<div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+				<div className="min-w-0 flex-1">
+					<h1 className="text-xl sm:text-2xl font-bold break-words">
+						{pr.title}
+					</h1>
+					<div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
 						<span>#{pr.number}</span>
 						<PrStateBadge
 							state={pr.state}
@@ -131,13 +133,15 @@ export function PullRequestDetailClient({
 								</span>
 							</span>
 						)}
-						<span>
-							wants to merge{" "}
-							<code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">
+					</div>
+					<div className="mt-1.5 text-sm text-muted-foreground">
+						<span className="inline-flex flex-wrap items-center gap-1">
+							<span className="shrink-0">merge</span>
+							<code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono break-all">
 								{pr.headRefName}
 							</code>
-							{" into "}
-							<code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono">
+							<span className="shrink-0">into</span>
+							<code className="rounded bg-muted px-1.5 py-0.5 text-xs font-mono break-all">
 								{pr.baseRefName}
 							</code>
 						</span>
@@ -146,7 +150,7 @@ export function PullRequestDetailClient({
 			</div>
 
 			{/* Metadata bar */}
-			<div className="mt-4 flex flex-wrap gap-2">
+			<div className="mt-3 sm:mt-4 flex flex-wrap gap-2">
 				{pr.mergeableState && <MergeableStateBadge state={pr.mergeableState} />}
 				<Badge variant="outline" className="text-xs font-mono">
 					{pr.headSha.slice(0, 7)}
@@ -158,10 +162,10 @@ export function PullRequestDetailClient({
 
 			{/* Body */}
 			{pr.body && (
-				<Card className="mt-6">
-					<CardContent className="pt-6">
-						<div className="prose prose-sm dark:prose-invert max-w-none">
-							<Markdown remarkPlugins={[remarkGfm]}>{pr.body}</Markdown>
+				<Card className="mt-4 sm:mt-6">
+					<CardContent className="px-3 pt-4 sm:px-6 sm:pt-6">
+						<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto">
+							<Streamdown>{pr.body}</Streamdown>
 						</div>
 					</CardContent>
 				</Card>
@@ -181,24 +185,26 @@ export function PullRequestDetailClient({
 
 			{/* Check runs */}
 			{pr.checkRuns.length > 0 && (
-				<div className="mt-8">
-					<h2 className="text-lg font-semibold mb-4">
+				<div className="mt-6 sm:mt-8">
+					<h2 className="text-lg font-semibold mb-3 sm:mb-4">
 						Checks ({pr.checkRuns.length})
 					</h2>
 					<Card>
-						<CardContent className="pt-4">
+						<CardContent className="px-3 pt-3 sm:px-6 sm:pt-4">
 							<div className="divide-y">
 								{pr.checkRuns.map((check) => (
 									<div
 										key={check.name}
-										className="flex items-center justify-between py-2"
+										className="flex items-center justify-between gap-2 py-2"
 									>
-										<div className="flex items-center gap-2">
+										<div className="flex items-center gap-2 min-w-0">
 											<CheckIcon
 												status={check.status}
 												conclusion={check.conclusion}
 											/>
-											<span className="text-sm font-medium">{check.name}</span>
+											<span className="text-sm font-medium truncate">
+												{check.name}
+											</span>
 										</div>
 										{check.conclusion && (
 											<Badge
@@ -209,15 +215,17 @@ export function PullRequestDetailClient({
 															? "destructive"
 															: "outline"
 												}
-												className={
+												className={`shrink-0 ${
 													check.conclusion === "success" ? "text-green-600" : ""
-												}
+												}`}
 											>
 												{check.conclusion}
 											</Badge>
 										)}
 										{!check.conclusion && check.status === "in_progress" && (
-											<Badge variant="outline">In progress</Badge>
+											<Badge variant="outline" className="shrink-0">
+												In progress
+											</Badge>
 										)}
 									</div>
 								))}
@@ -229,31 +237,31 @@ export function PullRequestDetailClient({
 
 			{/* Reviews */}
 			{pr.reviews.length > 0 && (
-				<div className="mt-8">
-					<h2 className="text-lg font-semibold mb-4">
+				<div className="mt-6 sm:mt-8">
+					<h2 className="text-lg font-semibold mb-3 sm:mb-4">
 						Reviews ({pr.reviews.length})
 					</h2>
-					<div className="space-y-3">
+					<div className="space-y-2 sm:space-y-3">
 						{pr.reviews.map((review) => (
 							<div
 								key={review.githubReviewId}
-								className="flex items-center gap-3 rounded-lg border px-4 py-3"
+								className="flex flex-wrap items-center gap-2 sm:gap-3 rounded-lg border px-3 py-2.5 sm:px-4 sm:py-3"
 							>
 								{review.authorLogin && (
-									<Avatar className="size-6">
+									<Avatar className="size-5 sm:size-6">
 										<AvatarImage src={review.authorAvatarUrl ?? undefined} />
 										<AvatarFallback className="text-[10px]">
 											{review.authorLogin[0]?.toUpperCase()}
 										</AvatarFallback>
 									</Avatar>
 								)}
-								<span className="text-sm font-medium">
+								<span className="text-sm font-medium truncate">
 									{review.authorLogin ?? "Unknown"}
 								</span>
 								<ReviewStateBadge state={review.state} />
 								{review.submittedAt && (
 									<span className="text-xs text-muted-foreground">
-										{formatDate(review.submittedAt)}
+										{formatRelative(review.submittedAt)}
 									</span>
 								)}
 							</div>
@@ -264,16 +272,16 @@ export function PullRequestDetailClient({
 
 			{/* Comments */}
 			{pr.comments.length > 0 && (
-				<div className="mt-8">
-					<h2 className="text-lg font-semibold mb-4">
+				<div className="mt-6 sm:mt-8">
+					<h2 className="text-lg font-semibold mb-3 sm:mb-4">
 						{pr.comments.length} Comment
 						{pr.comments.length !== 1 ? "s" : ""}
 					</h2>
-					<div className="space-y-4">
+					<div className="space-y-3 sm:space-y-4">
 						{pr.comments.map((comment) => (
 							<Card key={comment.githubCommentId}>
-								<CardHeader className="pb-2">
-									<div className="flex items-center gap-2 text-sm">
+								<CardHeader className="px-3 pb-2 sm:px-6">
+									<div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-sm">
 										{comment.authorLogin && (
 											<span className="flex items-center gap-1.5">
 												<Avatar className="size-5">
@@ -289,16 +297,14 @@ export function PullRequestDetailClient({
 												</span>
 											</span>
 										)}
-										<span className="text-muted-foreground">
-											{formatDate(comment.createdAt)}
+										<span className="text-xs sm:text-sm text-muted-foreground">
+											{formatRelative(comment.createdAt)}
 										</span>
 									</div>
 								</CardHeader>
-								<CardContent>
-									<div className="prose prose-sm dark:prose-invert max-w-none">
-										<Markdown remarkPlugins={[remarkGfm]}>
-											{comment.body}
-										</Markdown>
+								<CardContent className="px-3 sm:px-6">
+									<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto">
+										<Streamdown>{comment.body}</Streamdown>
 									</div>
 								</CardContent>
 							</Card>
@@ -308,13 +314,13 @@ export function PullRequestDetailClient({
 			)}
 
 			{pr.comments.length === 0 && pr.reviews.length === 0 && (
-				<p className="mt-8 text-sm text-muted-foreground">
+				<p className="mt-6 sm:mt-8 text-sm text-muted-foreground">
 					No comments or reviews yet.
 				</p>
 			)}
 
 			{/* Comment form */}
-			<Separator className="mt-8" />
+			<Separator className="mt-6 sm:mt-8" />
 			<CommentForm
 				ownerLogin={owner}
 				name={name}
@@ -358,23 +364,33 @@ export function FilesChangedClient({
 
 	const files = filesData.files;
 
-	// Build a unified patch from individual file patches for PatchDiff
-	const unifiedPatch = useMemo(() => {
-		if (files.length === 0) return null;
-
-		const parts: Array<string> = [];
+	// Build per-file patches — PatchDiff expects exactly 1 file per patch string
+	const filePatchEntries = useMemo(() => {
+		const entries: Array<{
+			filename: string;
+			patch: string;
+			status: (typeof files)[number]["status"];
+			additions: number;
+			deletions: number;
+		}> = [];
 		for (const file of files) {
 			if (file.patch === null) continue;
 			const oldName = file.previousFilename ?? file.filename;
-			parts.push(
+			const singlePatch = [
 				`diff --git a/${oldName} b/${file.filename}`,
 				`--- a/${oldName}`,
 				`+++ b/${file.filename}`,
 				file.patch,
-			);
+			].join("\n");
+			entries.push({
+				filename: file.filename,
+				patch: singlePatch,
+				status: file.status,
+				additions: file.additions,
+				deletions: file.deletions,
+			});
 		}
-
-		return parts.length > 0 ? parts.join("\n") : null;
+		return entries;
 	}, [files]);
 
 	// File summary stats
@@ -382,8 +398,8 @@ export function FilesChangedClient({
 	const totalDeletions = files.reduce((sum, f) => sum + f.deletions, 0);
 
 	return (
-		<div className="mt-8">
-			<div className="flex items-center justify-between mb-4">
+		<div className="mt-6 sm:mt-8">
+			<div className="flex items-center justify-between mb-3 sm:mb-4">
 				<h2 className="text-lg font-semibold">
 					Files Changed
 					{files.length > 0 && (
@@ -402,7 +418,7 @@ export function FilesChangedClient({
 
 			{files.length === 0 && (
 				<Card>
-					<CardContent className="pt-6">
+					<CardContent className="px-3 pt-4 sm:px-6 sm:pt-6">
 						<p className="text-sm text-muted-foreground">
 							No file changes synced yet. Changes will appear automatically when
 							the diff data is available.
@@ -411,9 +427,28 @@ export function FilesChangedClient({
 				</Card>
 			)}
 
-			{unifiedPatch !== null && (
-				<div className="overflow-hidden rounded-lg border">
-					<PatchDiff patch={unifiedPatch} />
+			{filePatchEntries.length > 0 && (
+				<div className="space-y-3">
+					{filePatchEntries.map((entry) => (
+						<div key={entry.filename} className="min-w-0">
+							<div className="flex items-center gap-2 px-2 py-1.5 sm:px-3 sm:py-2 bg-muted/50 rounded-t-lg border border-b-0 text-xs">
+								<FileStatusBadge status={entry.status} />
+								<span className="font-mono font-medium truncate min-w-0">
+									{entry.filename}
+								</span>
+								<span className="ml-auto flex gap-2 shrink-0">
+									<span className="text-green-600">+{entry.additions}</span>
+									<span className="text-red-600">-{entry.deletions}</span>
+								</span>
+							</div>
+							<div className="overflow-x-auto rounded-b-lg border">
+								<PatchDiff
+									patch={entry.patch}
+									options={{ diffStyle: "unified" }}
+								/>
+							</div>
+						</div>
+					))}
 				</div>
 			)}
 
@@ -429,12 +464,16 @@ export function FilesChangedClient({
 							.map((f) => (
 								<div
 									key={f.filename}
-									className="flex items-center gap-2 text-xs text-muted-foreground"
+									className="flex items-center gap-2 text-xs text-muted-foreground min-w-0"
 								>
 									<FileStatusBadge status={f.status} />
-									<span className="font-mono">{f.filename}</span>
-									<span className="text-green-600">+{f.additions}</span>
-									<span className="text-red-600">-{f.deletions}</span>
+									<span className="font-mono truncate min-w-0">
+										{f.filename}
+									</span>
+									<span className="shrink-0 text-green-600">
+										+{f.additions}
+									</span>
+									<span className="shrink-0 text-red-600">-{f.deletions}</span>
 								</div>
 							))}
 					</div>
@@ -554,9 +593,9 @@ function PrActionBar({
 		(mergeableState === "clean" || mergeableState === "unstable");
 
 	return (
-		<Card className="mt-6">
-			<CardContent className="pt-4">
-				<div className="flex flex-wrap items-center gap-3">
+		<Card className="mt-4 sm:mt-6">
+			<CardContent className="px-3 pt-3 sm:px-6 sm:pt-4">
+				<div className="flex flex-wrap items-center gap-2 sm:gap-3">
 					{/* Merge button */}
 					{state === "open" && (
 						<Button
@@ -619,37 +658,35 @@ function PrActionBar({
 							{isUpdatingState ? "Reopening..." : "Reopen pull request"}
 						</Button>
 					)}
-
-					{/* Feedback messages */}
-					{Result.isFailure(mergeResult) && (
-						<span className="text-sm text-destructive">
-							Merge failed. Please try again.
-						</span>
-					)}
-					{Result.isFailure(stateResult) && (
-						<span className="text-sm text-destructive">
-							State update failed. Please try again.
-						</span>
-					)}
-
-					{/* Merge status hint */}
-					{state === "open" && !isMergeable && !draft && (
-						<span className="text-xs text-muted-foreground">
-							{mergeableState === "dirty"
-								? "This branch has conflicts that must be resolved."
-								: mergeableState === "blocked"
-									? "Merging is blocked by branch protection rules."
-									: mergeableState === null
-										? "Merge status unknown."
-										: `Merge state: ${mergeableState}`}
-						</span>
-					)}
-					{state === "open" && draft && (
-						<span className="text-xs text-muted-foreground">
-							This pull request is a draft and cannot be merged yet.
-						</span>
-					)}
 				</div>
+
+				{/* Feedback messages + status hints below buttons */}
+				{Result.isFailure(mergeResult) && (
+					<p className="mt-2 text-sm text-destructive">
+						Merge failed. Please try again.
+					</p>
+				)}
+				{Result.isFailure(stateResult) && (
+					<p className="mt-2 text-sm text-destructive">
+						State update failed. Please try again.
+					</p>
+				)}
+				{state === "open" && !isMergeable && !draft && (
+					<p className="mt-2 text-xs text-muted-foreground">
+						{mergeableState === "dirty"
+							? "This branch has conflicts that must be resolved."
+							: mergeableState === "blocked"
+								? "Merging is blocked by branch protection rules."
+								: mergeableState === null
+									? "Merge status unknown."
+									: `Merge state: ${mergeableState}`}
+					</p>
+				)}
+				{state === "open" && draft && (
+					<p className="mt-2 text-xs text-muted-foreground">
+						This pull request is a draft and cannot be merged yet.
+					</p>
+				)}
 			</CardContent>
 		</Card>
 	);
@@ -658,6 +695,65 @@ function PrActionBar({
 // ---------------------------------------------------------------------------
 // Helper components
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Sync from GitHub component — shown when PR is not found locally
+// ---------------------------------------------------------------------------
+
+function SyncFromGitHub({
+	owner,
+	name,
+	number,
+	entityType,
+}: {
+	owner: string;
+	name: string;
+	number: number;
+	entityType: "pull_request" | "issue";
+}) {
+	const syncClient = useOnDemandSync();
+	const [syncResult, triggerSync] = useAtom(syncClient.syncPullRequest.call);
+
+	const isSyncing = Result.isWaiting(syncResult);
+	const hasFailed = Result.isFailure(syncResult);
+	const hasSucceeded = Result.isSuccess(syncResult);
+
+	return (
+		<div>
+			<h1 className="text-2xl font-bold">Pull Request #{number}</h1>
+			<p className="mt-2 text-muted-foreground">
+				This pull request hasn&apos;t been synced yet.
+			</p>
+			<div className="mt-4">
+				{!hasSucceeded && (
+					<Button
+						onClick={() => {
+							triggerSync({
+								ownerLogin: owner,
+								name,
+								number,
+							});
+						}}
+						disabled={isSyncing}
+					>
+						{isSyncing ? "Syncing from GitHub..." : "Sync from GitHub"}
+					</Button>
+				)}
+				{hasSucceeded && (
+					<p className="text-sm text-muted-foreground">
+						Sync complete. Data will appear momentarily...
+					</p>
+				)}
+				{hasFailed && (
+					<p className="mt-2 text-sm text-destructive">
+						Failed to sync from GitHub. The pull request may not exist, or the
+						repository may be private.
+					</p>
+				)}
+			</div>
+		</div>
+	);
+}
 
 function FileStatusBadge({
 	status,

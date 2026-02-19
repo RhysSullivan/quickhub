@@ -15,6 +15,7 @@ import type * as rpc_admin from "../rpc/admin.js";
 import type * as rpc_bootstrapWrite from "../rpc/bootstrapWrite.js";
 import type * as rpc_githubActions from "../rpc/githubActions.js";
 import type * as rpc_githubWrite from "../rpc/githubWrite.js";
+import type * as rpc_onDemandSync from "../rpc/onDemandSync.js";
 import type * as rpc_projectionQueries from "../rpc/projectionQueries.js";
 import type * as rpc_replayReconcile from "../rpc/replayReconcile.js";
 import type * as rpc_repoBootstrap from "../rpc/repoBootstrap.js";
@@ -43,6 +44,7 @@ declare const fullApi: ApiFromModules<{
   "rpc/bootstrapWrite": typeof rpc_bootstrapWrite;
   "rpc/githubActions": typeof rpc_githubActions;
   "rpc/githubWrite": typeof rpc_githubWrite;
+  "rpc/onDemandSync": typeof rpc_onDemandSync;
   "rpc/projectionQueries": typeof rpc_projectionQueries;
   "rpc/replayReconcile": typeof rpc_replayReconcile;
   "rpc/repoBootstrap": typeof rpc_repoBootstrap;

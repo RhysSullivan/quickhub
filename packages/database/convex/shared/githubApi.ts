@@ -15,7 +15,54 @@ export class GitHubTokenMissing extends Data.TaggedError(
 )<{}> {}
 
 // ---------------------------------------------------------------------------
-// Service
+// Token Provider (abstracts PAT vs. GitHub App installation tokens)
+// ---------------------------------------------------------------------------
+
+/**
+ * A service that provides a GitHub API token.
+ *
+ * Current implementation: reads `GITHUB_PAT` from environment.
+ * Future: `InstallationTokenProvider` fetches short-lived installation
+ * tokens from a GitHub App, keyed by installation ID.
+ */
+type IGitHubTokenProvider = Readonly<{
+	/**
+	 * Get a valid GitHub API token.
+	 *
+	 * For PAT, this is a static string read from env.
+	 * For GitHub App installation tokens, this may involve a fetch
+	 * and caching with expiry.
+	 *
+	 * Missing/expired tokens should die (configuration error), not
+	 * fail with a typed error — callers cannot recover from auth
+	 * misconfiguration.
+	 */
+	getToken: Effect.Effect<string>;
+}>;
+
+export class GitHubTokenProvider extends Context.Tag(
+	"@quickhub/GitHubTokenProvider",
+)<GitHubTokenProvider, IGitHubTokenProvider>() {
+	/**
+	 * Reads GITHUB_PAT from process.env.
+	 * Dies with GitHubTokenMissing if not set (unrecoverable config error).
+	 */
+	static Pat = Layer.succeed(
+		this,
+		GitHubTokenProvider.of({
+			getToken: Effect.suspend(() => {
+				const token = process.env.GITHUB_PAT;
+				if (!token) {
+					return Effect.die(new GitHubTokenMissing());
+				}
+				return Effect.succeed(token);
+			}),
+		}),
+	);
+}
+
+// ---------------------------------------------------------------------------
+// GitHub API Client
 // ---------------------------------------------------------------------------
 
 const BASE_URL = "https://api.github.com";
@@ -61,11 +108,13 @@ const makeClient = (token: string): IGitHubApiClient => {
 	return { use };
 };
 
+/**
+ * Constructs a GitHubApiClient by obtaining a token from
+ * the GitHubTokenProvider service.
+ */
 const make = Effect.gen(function* () {
-	const token = process.env.GITHUB_PAT;
-	if (!token) {
-		return yield* Effect.die(new GitHubTokenMissing());
-	}
+	const provider = yield* GitHubTokenProvider;
+	const token = yield* provider.getToken;
 	return makeClient(token);
 });
 
@@ -73,9 +122,26 @@ export class GitHubApiClient extends Context.Tag("@quickhub/GitHubApiClient")<
 	GitHubApiClient,
 	IGitHubApiClient
 >() {
+	/**
+	 * Layer that constructs the client from a GitHubTokenProvider.
+	 * Requires GitHubTokenProvider to be provided in the context.
+	 */
 	static Default = Layer.effect(this, make).pipe(
 		Layer.annotateSpans({ module: "GitHubApiClient" }),
 	);
 
+	/**
+	 * Production layer: GitHubApiClient backed by PAT from environment.
+	 * This is the drop-in replacement for the old `Default` that read
+	 * process.env directly.
+	 *
+	 * When migrating to GitHub App tokens, replace `GitHubTokenProvider.Pat`
+	 * with `GitHubTokenProvider.Installation(installationId)`.
+	 */
+	static Live = Layer.provide(this.Default, GitHubTokenProvider.Pat);
+
+	/**
+	 * Test/manual layer: construct a client from an explicit token string.
+	 */
 	static fromToken = (token: string) => Layer.succeed(this, makeClient(token));
 }

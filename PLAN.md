@@ -177,6 +177,80 @@ When this active scope is complete, output `<I HAVE COMPLETED THE TASK>`.
 - Fixed unbounded `.collect()` in `getQueueHealth` (webhookProcessor) — same bounded pattern.
 - Added structured `console.info` logging to `processAllPending` and `promoteRetryEvents` for observability.
 
+**Effect-atom state lifecycle fix — COMPLETE** (session 2026-02-18)
+- Root cause: `RegistryProvider` in `convex-client-provider.tsx` was created without `defaultIdleTTL`, so atoms were cleaned up immediately when all listeners unsubscribed (component unmount). The default context fallback uses 400ms, but explicitly creating a `RegistryProvider` without the option results in `undefined` (no TTL → immediate cleanup).
+- Fix: Added `defaultIdleTTL={30_000}` (30 seconds) to `<RegistryProvider>` in `packages/ui/src/components/convex-client-provider.tsx`. This keeps atom state alive for 30s after unmount, surviving tab switches, navigation, and React Suspense boundaries.
+- One-line change, all 52 tests pass, typecheck clean.
+
+**Slice 14 — Route-based tabs with zero-skeleton server prefetch — COMPLETE** (session 2026-02-18)
+- **Goal**: Replace client-side `<Tabs>` component with real Next.js routes (`/pulls`, `/issues`, `/activity`) backed by server-side data prefetching, eliminating all loading skeletons on navigation.
+- **Prefetch on links**: Changed `prefetch={false}` → `prefetch={true}` in centralized `<Link>` component (`packages/ui/src/components/link.tsx`).
+- **Pulls page** (previously completed): `pulls/page.tsx` is a server component that prefetches open PRs via `serverQueries.listPullRequests.queryPromise()`; `pulls/pulls-client.tsx` uses `useSubscriptionWithInitial` for instant render + live updates.
+- **Issues page**: Split monolithic client component into `issues/page.tsx` (server component, prefetches open issues) + `issues/issues-client.tsx` (client component with `useSubscriptionWithInitial`). Zero skeletons on default view.
+- **Activity page**: Split monolithic client component into `activity/page.tsx` (server component, prefetches last 50 activities) + `activity/activity-client.tsx` (client component with `useSubscriptionWithInitial`). Zero skeletons.
+- **Layout header**: Split `layout.tsx` into server component (prefetches repo overview) + `layout-client.tsx` (client component with `useSubscriptionWithInitial` for live overview updates). Header renders instantly on first visit with no skeleton.
+- **Root redirect**: `[owner]/[name]/page.tsx` redirects to `/pulls` (8 lines).
+- **URL state**: `search-params.ts` simplified to only state filter (tab parsers removed since tabs are now routes).
+- **Back-links**: PR detail and issue detail pages updated to point to `/pulls` and `/issues` routes respectively.
+- **Pattern**: Server component → `queryPromise()` → pass promise to client → `use(promise)` suspends server-side → `useSubscriptionWithInitial(atom, initialData)` provides instant data + live subscription fallover.
+- All 52 tests pass, typecheck clean across all packages.
+
+**Slice 15 — PAT → GitHub App migration prep — COMPLETE** (session 2026-02-18)
+- **Token provider abstraction**: Created `GitHubTokenProvider` Effect service in `packages/database/convex/shared/githubApi.ts`. Defines `getToken: Effect.Effect<string>` interface. Current implementation: `GitHubTokenProvider.Pat` reads `GITHUB_PAT` from `process.env`, dies on missing (unrecoverable config error, matching original `Effect.die` behavior).
+- **`GitHubApiClient` refactored**: `Default` layer now depends on `GitHubTokenProvider` (via `yield* GitHubTokenProvider`). New `Live` layer = `Default` + `Pat` (drop-in for production). `fromToken` static remains for test/manual use.
+- **All 7 consumer sites updated**: `GitHubApiClient.Default` → `GitHubApiClient.Live` in `githubActions.ts`, `githubWrite.ts`, `repoOnboard.ts`, `repoBootstrapImpl.ts`, `onDemandSync.ts`.
+- **Zero consumer signature changes**: All consumers still `yield* GitHubApiClient` and call `.use(fn)`. Error channels unchanged.
+- **Migration path documented**: See GitHub App Migration Checklist below.
+- All 52 tests pass, typecheck clean.
+
+### GitHub App Migration Checklist
+
+When ready to migrate from PAT to GitHub App:
+
+**1. Create GitHub App**
+- Register a GitHub App with required permissions (issues, pull_requests, checks, contents, metadata)
+- Enable webhook events: `push`, `pull_request`, `issues`, `issue_comment`, `check_run`, `pull_request_review`, `pull_request_review_comment`
+- Generate a private key and store securely
+
+**2. Store App Credentials in Convex**
+- `GITHUB_APP_ID` — App ID from GitHub
+- `GITHUB_APP_PRIVATE_KEY` — PEM-encoded private key
+- Store in Convex environment variables (not `.env` for production)
+
+**3. Implement `GitHubTokenProvider.Installation`**
+```
+static Installation = (installationId: number) =>
+  Layer.effect(
+    this,
+    Effect.gen(function* () {
+      // Use GITHUB_APP_ID + GITHUB_APP_PRIVATE_KEY to generate JWT
+      // Exchange JWT for installation access token via POST /app/installations/{id}/access_tokens
+      // Cache token until expires_at (typically 1 hour)
+      // Return cached token or refresh on expiry
+    }),
+  );
+```
+
+**4. Update `GitHubApiClient.Live`**
+- Change from `Layer.provide(Default, GitHubTokenProvider.Pat)` to `Layer.provide(Default, GitHubTokenProvider.Installation(installationId))`
+- Installation ID comes from `github_installations` table (already in schema)
+
+**5. Webhook Verification Changes**
+- Current: HMAC-SHA256 with `GITHUB_WEBHOOK_SECRET`
+- GitHub App: Same mechanism, secret is per-app (configure in App settings)
+- No code change needed if secret env var is updated
+
+**6. Multi-Repo Token Scoping**
+- PAT: One token for all repos
+- GitHub App: One installation per org/user account, token scoped to installed repos
+- May need to look up installation ID per repository and cache tokens per installation
+
+**7. Deprecation Path**
+- Phase 1: Run both PAT and App in parallel (App for new repos, PAT for existing)
+- Phase 2: Migrate existing repos to App
+- Phase 3: Remove PAT code path and `GitHubTokenProvider.Pat`
+- Remove `GITHUB_PAT` from environment
+
 <!-- ACTIVE_SCOPE_END -->
 
 ## Prerequisites

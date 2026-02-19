@@ -442,7 +442,7 @@ addRepoByUrlDef.implement((args) =>
 			webhookCreated,
 			bootstrapScheduled: decoded.bootstrapScheduled,
 		};
-	}).pipe(Effect.provide(GitHubApiClient.Default)),
+	}).pipe(Effect.provide(GitHubApiClient.Live)),
 );
 
 // ---------------------------------------------------------------------------

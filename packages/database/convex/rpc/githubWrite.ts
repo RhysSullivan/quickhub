@@ -517,7 +517,7 @@ executeWriteOperationDef.implement((args) =>
 		return { completed: result.success };
 	}).pipe(
 		Effect.catchAll(() => Effect.succeed({ completed: false })),
-		Effect.provide(GitHubApiClient.Default),
+		Effect.provide(GitHubApiClient.Live),
 	),
 );
 

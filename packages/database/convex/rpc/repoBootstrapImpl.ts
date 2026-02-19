@@ -433,5 +433,5 @@ bootstrapRepoDef.implement((args) =>
 		});
 
 		return result;
-	}).pipe(Effect.provide(GitHubApiClient.Default)),
+	}).pipe(Effect.provide(GitHubApiClient.Live)),
 );

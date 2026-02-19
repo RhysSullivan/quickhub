@@ -71,5 +71,7 @@ const AppConvexClientLayer = Layer.mergeAll(
 export const atomRuntime = Atom.runtime(AppConvexClientLayer);
 
 export function ConvexClientProvider({ children }: { children: ReactNode }) {
-	return <RegistryProvider>{children}</RegistryProvider>;
+	return (
+		<RegistryProvider defaultIdleTTL={30_000}>{children}</RegistryProvider>
+	);
 }

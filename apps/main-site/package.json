@@ -35,9 +35,8 @@
 		"nuqs": "catalog:",
 		"react": "catalog:",
 		"react-dom": "catalog:",
-		"react-markdown": "^10.1.0",
-		"remark-gfm": "^4.0.1",
-		"server-only": "^0.0.1"
+		"server-only": "^0.0.1",
+		"streamdown": "^2.2.0"
 	},
 	"devDependencies": {
 		"@packages/convex-test": "workspace:*",

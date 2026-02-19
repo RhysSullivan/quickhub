@@ -1,23 +1,14 @@
-import {
-	createSearchParamsCache,
-	parseAsString,
-	parseAsStringLiteral,
-} from "nuqs/server";
-
-/** Available tabs on the repo detail page */
-export const REPO_TABS = ["pulls", "issues", "activity"] as const;
-export type RepoTab = (typeof REPO_TABS)[number];
+import { createSearchParamsCache, parseAsStringLiteral } from "nuqs/server";
 
 /** State filter values for PR and issue lists */
 export const STATE_FILTERS = ["all", "open", "closed"] as const;
 export type StateFilter = (typeof STATE_FILTERS)[number];
 
-/** Shared parsers for repo detail page URL state */
-export const repoDetailParsers = {
-	tab: parseAsStringLiteral(REPO_TABS).withDefault("pulls"),
+/** Shared parsers for state filter on PR/issue list pages */
+export const stateFilterParsers = {
 	state: parseAsStringLiteral(STATE_FILTERS).withDefault("open"),
 };
 
-/** Server-side search params cache for the repo detail page */
-export const repoDetailSearchParamsCache =
-	createSearchParamsCache(repoDetailParsers);
+/** Server-side search params cache for list pages */
+export const stateFilterSearchParamsCache =
+	createSearchParamsCache(stateFilterParsers);
