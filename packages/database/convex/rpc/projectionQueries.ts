@@ -5,7 +5,14 @@ import {
 } from "@packages/confect";
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
 import { Effect, Option, Schema } from "effect";
-import { ConfectQueryCtx, confectSchema } from "../confect";
+import { internal } from "../_generated/api";
+import {
+	ConfectActionCtx,
+	ConfectMutationCtx,
+	ConfectQueryCtx,
+	confectSchema,
+} from "../confect";
+import { GitHubApiClient } from "../shared/githubApi";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -161,6 +168,27 @@ const listPrFilesDef = factory.query({
 				previousFilename: Schema.NullOr(Schema.String),
 			}),
 		),
+	}),
+});
+
+/**
+ * Request on-demand PR file sync.
+ *
+ * When a user opens a PR detail page and we have no cached files for it,
+ * this mutation schedules a background `syncPrFiles` action to fetch
+ * the file list + patches from GitHub.
+ *
+ * Idempotent: if files already exist for the PR's current headSha,
+ * no sync is scheduled.
+ */
+const requestPrFileSyncDef = factory.mutation({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		number: Schema.Number,
+	},
+	success: Schema.Struct({
+		scheduled: Schema.Boolean,
 	}),
 });
 
@@ -880,6 +908,67 @@ listPrFilesDef.implement((args) =>
 );
 
 // ---------------------------------------------------------------------------
+// requestPrFileSync implementation
+// ---------------------------------------------------------------------------
+
+requestPrFileSyncDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectMutationCtx;
+
+		// 1. Find the repo
+		const repo = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_fullName", (q) =>
+				q.eq("fullName", `${args.ownerLogin}/${args.name}`),
+			)
+			.first();
+
+		if (Option.isNone(repo)) return { scheduled: false };
+
+		const repositoryId = repo.value.githubRepoId;
+
+		// 2. Find the PR to get its headSha
+		const prOpt = yield* ctx.db
+			.query("github_pull_requests")
+			.withIndex("by_repositoryId_and_number", (q) =>
+				q.eq("repositoryId", repositoryId).eq("number", args.number),
+			)
+			.first();
+
+		if (Option.isNone(prOpt)) return { scheduled: false };
+
+		const headSha = prOpt.value.headSha;
+		if (headSha === "") return { scheduled: false };
+
+		// 3. Check if we already have files for this headSha
+		const existingFile = yield* ctx.db
+			.query("github_pull_request_files")
+			.withIndex("by_repositoryId_and_pullRequestNumber_and_headSha", (q) =>
+				q
+					.eq("repositoryId", repositoryId)
+					.eq("pullRequestNumber", args.number)
+					.eq("headSha", headSha),
+			)
+			.first();
+
+		if (Option.isSome(existingFile)) return { scheduled: false };
+
+		// 4. No files cached — schedule a background sync
+		yield* Effect.promise(() =>
+			ctx.scheduler.runAfter(0, internal.rpc.githubActions.syncPrFiles, {
+				ownerLogin: args.ownerLogin,
+				name: args.name,
+				repositoryId,
+				pullRequestNumber: args.number,
+				headSha,
+			}),
+		);
+
+		return { scheduled: true };
+	}),
+);
+
+// ---------------------------------------------------------------------------
 // Paginated list implementations
 // ---------------------------------------------------------------------------
 
@@ -1197,6 +1286,7 @@ const projectionQueriesModule = makeRpcModule(
 		getPullRequestDetail: getPullRequestDetailDef,
 		getWorkflowRunDetail: getWorkflowRunDetailDef,
 		listPrFiles: listPrFilesDef,
+		requestPrFileSync: requestPrFileSyncDef,
 	},
 	{ middlewares: DatabaseRpcTelemetryLayer },
 );
@@ -1216,6 +1306,7 @@ export const {
 	getPullRequestDetail,
 	getWorkflowRunDetail,
 	listPrFiles,
+	requestPrFileSync,
 } = projectionQueriesModule.handlers;
 export { projectionQueriesModule };
 export type ProjectionQueriesModule = typeof projectionQueriesModule;

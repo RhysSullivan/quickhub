@@ -65,11 +65,11 @@ export function DetailSkeleton() {
 							</div>
 						</div>
 						<div className="rounded-b-md border p-2 space-y-1.5">
-							{Array.from({ length: 5 }, (_, j) => (
+							{[85, 72, 93, 60, 78].map((w, j) => (
 								<div
 									key={j}
 									className="h-3 rounded bg-muted"
-									style={{ width: `${60 + Math.random() * 35}%` }}
+									style={{ width: `${w}%` }}
 								/>
 							))}
 						</div>
