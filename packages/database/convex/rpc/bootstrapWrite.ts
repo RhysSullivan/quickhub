@@ -15,13 +15,6 @@ import {
 	syncReviewInsert,
 	syncReviewReplace,
 } from "../shared/aggregateSync";
-import {
-	updateAllProjections,
-	updateRepoOverview,
-	upsertIssueView,
-	upsertPullRequestView,
-	upsertWorkflowRunView,
-} from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -324,17 +317,6 @@ upsertPullRequestsDef.implement((args) =>
 			upserted++;
 		}
 
-		// Incrementally update projections so subscriptions push new data to the UI
-		// (skipped during bootstrap — projections are rebuilt once at the end)
-		if (!args.skipProjections) {
-			for (const pr of args.pullRequests) {
-				yield* upsertPullRequestView(args.repositoryId, pr).pipe(
-					Effect.ignoreLogged,
-				);
-			}
-			yield* updateRepoOverview(args.repositoryId).pipe(Effect.ignoreLogged);
-		}
-
 		return { upserted };
 	}),
 );
@@ -387,17 +369,6 @@ upsertIssuesDef.implement((args) =>
 				}
 			}
 			upserted++;
-		}
-
-		// Incrementally update projections so subscriptions push new data to the UI
-		// (skipped during bootstrap — projections are rebuilt once at the end)
-		if (!args.skipProjections) {
-			for (const issue of args.issues) {
-				yield* upsertIssueView(args.repositoryId, issue).pipe(
-					Effect.ignoreLogged,
-				);
-			}
-			yield* updateRepoOverview(args.repositoryId).pipe(Effect.ignoreLogged);
 		}
 
 		return { upserted };
@@ -536,24 +507,6 @@ upsertCheckRunsDef.implement((args) =>
 			upserted++;
 		}
 
-		// Check runs affect PR list view (lastCheckConclusion) and overview (failingCheckCount).
-		// Instead of full rebuild, find the affected PRs by headSha and update just those views.
-		const affectedShas = [...new Set(args.checkRuns.map((cr) => cr.headSha))];
-		for (const sha of affectedShas) {
-			const affectedPr = yield* ctx.db
-				.query("github_pull_requests")
-				.withIndex("by_repositoryId_and_headSha", (q) =>
-					q.eq("repositoryId", args.repositoryId).eq("headSha", sha),
-				)
-				.first();
-			if (Option.isSome(affectedPr)) {
-				yield* upsertPullRequestView(args.repositoryId, affectedPr.value).pipe(
-					Effect.ignoreLogged,
-				);
-			}
-		}
-		yield* updateRepoOverview(args.repositoryId).pipe(Effect.ignoreLogged);
-
 		return { upserted };
 	}),
 );
@@ -599,13 +552,6 @@ upsertWorkflowRunsDef.implement((args) =>
 				yield* ctx.db.insert("github_workflow_runs", data);
 			}
 			upserted++;
-		}
-
-		// Incrementally update workflow run projection per-entity
-		for (const run of args.workflowRuns) {
-			yield* upsertWorkflowRunView(args.repositoryId, run).pipe(
-				Effect.ignoreLogged,
-			);
 		}
 
 		return { upserted };
@@ -657,24 +603,6 @@ upsertWorkflowJobsDef.implement((args) =>
 			upserted++;
 		}
 
-		// Job counts feed into the workflow run list view — update affected runs
-		const affectedRunIds = [
-			...new Set(args.workflowJobs.map((j) => j.githubRunId)),
-		];
-		for (const runId of affectedRunIds) {
-			const run = yield* ctx.db
-				.query("github_workflow_runs")
-				.withIndex("by_repositoryId_and_githubRunId", (q) =>
-					q.eq("repositoryId", args.repositoryId).eq("githubRunId", runId),
-				)
-				.first();
-			if (Option.isSome(run)) {
-				yield* upsertWorkflowRunView(args.repositoryId, run.value).pipe(
-					Effect.ignoreLogged,
-				);
-			}
-		}
-
 		return { upserted };
 	}),
 );
@@ -699,16 +627,6 @@ updateSyncJobStateDef.implement((args) =>
 			attemptCount: job.value.attemptCount + 1,
 			updatedAt: now,
 		});
-
-		// When bootstrap completes, update the repo overview counters.
-		// The individual view tables (PR list, issue list, workflow runs)
-		// are updated incrementally during each batch write, so we only
-		// need to refresh the aggregate counts here.
-		if (args.state === "done" && job.value.repositoryId !== null) {
-			yield* updateRepoOverview(job.value.repositoryId).pipe(
-				Effect.ignoreLogged,
-			);
-		}
 
 		return { updated: true };
 	}),

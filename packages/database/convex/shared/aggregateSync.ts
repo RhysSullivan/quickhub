@@ -29,37 +29,53 @@ import {
 
 type MutCtx = GenericMutationCtx<GenericDataModel>;
 
+const isMissingAggregateComponentError = (error: Error) =>
+	error.message.includes('Component "') &&
+	error.message.includes("is not registered");
+
+const runAggregateSync = <A>(operation: () => Promise<A>) =>
+	Effect.tryPromise({
+		try: operation,
+		catch: (error) => new Error(String(error)),
+	}).pipe(
+		Effect.catchAll((error) =>
+			isMissingAggregateComponentError(error)
+				? Effect.succeed(null)
+				: Effect.die(error),
+		),
+	);
+
 // ---------------------------------------------------------------------------
 // Pull Requests
 // ---------------------------------------------------------------------------
 
 export const syncPrInsert = (ctx: MutCtx, doc: Doc<"github_pull_requests">) =>
-	Effect.promise(() => prsByRepo.insertIfDoesNotExist(ctx, doc));
+	runAggregateSync(() => prsByRepo.insertIfDoesNotExist(ctx, doc));
 
 export const syncPrReplace = (
 	ctx: MutCtx,
 	oldDoc: Doc<"github_pull_requests">,
 	newDoc: Doc<"github_pull_requests">,
-) => Effect.promise(() => prsByRepo.replace(ctx, oldDoc, newDoc));
+) => runAggregateSync(() => prsByRepo.replace(ctx, oldDoc, newDoc));
 
 export const syncPrDelete = (ctx: MutCtx, doc: Doc<"github_pull_requests">) =>
-	Effect.promise(() => prsByRepo.delete(ctx, doc));
+	runAggregateSync(() => prsByRepo.delete(ctx, doc));
 
 // ---------------------------------------------------------------------------
 // Issues
 // ---------------------------------------------------------------------------
 
 export const syncIssueInsert = (ctx: MutCtx, doc: Doc<"github_issues">) =>
-	Effect.promise(() => issuesByRepo.insertIfDoesNotExist(ctx, doc));
+	runAggregateSync(() => issuesByRepo.insertIfDoesNotExist(ctx, doc));
 
 export const syncIssueReplace = (
 	ctx: MutCtx,
 	oldDoc: Doc<"github_issues">,
 	newDoc: Doc<"github_issues">,
-) => Effect.promise(() => issuesByRepo.replace(ctx, oldDoc, newDoc));
+) => runAggregateSync(() => issuesByRepo.replace(ctx, oldDoc, newDoc));
 
 export const syncIssueDelete = (ctx: MutCtx, doc: Doc<"github_issues">) =>
-	Effect.promise(() => issuesByRepo.delete(ctx, doc));
+	runAggregateSync(() => issuesByRepo.delete(ctx, doc));
 
 // ---------------------------------------------------------------------------
 // Check Runs
@@ -68,13 +84,13 @@ export const syncIssueDelete = (ctx: MutCtx, doc: Doc<"github_issues">) =>
 export const syncCheckRunInsert = (
 	ctx: MutCtx,
 	doc: Doc<"github_check_runs">,
-) => Effect.promise(() => checkRunsByRepo.insertIfDoesNotExist(ctx, doc));
+) => runAggregateSync(() => checkRunsByRepo.insertIfDoesNotExist(ctx, doc));
 
 export const syncCheckRunReplace = (
 	ctx: MutCtx,
 	oldDoc: Doc<"github_check_runs">,
 	newDoc: Doc<"github_check_runs">,
-) => Effect.promise(() => checkRunsByRepo.replace(ctx, oldDoc, newDoc));
+) => runAggregateSync(() => checkRunsByRepo.replace(ctx, oldDoc, newDoc));
 
 // ---------------------------------------------------------------------------
 // Issue Comments
@@ -83,18 +99,19 @@ export const syncCheckRunReplace = (
 export const syncCommentInsert = (
 	ctx: MutCtx,
 	doc: Doc<"github_issue_comments">,
-) => Effect.promise(() => commentsByIssueNumber.insertIfDoesNotExist(ctx, doc));
+) =>
+	runAggregateSync(() => commentsByIssueNumber.insertIfDoesNotExist(ctx, doc));
 
 export const syncCommentReplace = (
 	ctx: MutCtx,
 	oldDoc: Doc<"github_issue_comments">,
 	newDoc: Doc<"github_issue_comments">,
-) => Effect.promise(() => commentsByIssueNumber.replace(ctx, oldDoc, newDoc));
+) => runAggregateSync(() => commentsByIssueNumber.replace(ctx, oldDoc, newDoc));
 
 export const syncCommentDelete = (
 	ctx: MutCtx,
 	doc: Doc<"github_issue_comments">,
-) => Effect.promise(() => commentsByIssueNumber.delete(ctx, doc));
+) => runAggregateSync(() => commentsByIssueNumber.delete(ctx, doc));
 
 // ---------------------------------------------------------------------------
 // Pull Request Reviews
@@ -103,26 +120,26 @@ export const syncCommentDelete = (
 export const syncReviewInsert = (
 	ctx: MutCtx,
 	doc: Doc<"github_pull_request_reviews">,
-) => Effect.promise(() => reviewsByPrNumber.insertIfDoesNotExist(ctx, doc));
+) => runAggregateSync(() => reviewsByPrNumber.insertIfDoesNotExist(ctx, doc));
 
 export const syncReviewReplace = (
 	ctx: MutCtx,
 	oldDoc: Doc<"github_pull_request_reviews">,
 	newDoc: Doc<"github_pull_request_reviews">,
-) => Effect.promise(() => reviewsByPrNumber.replace(ctx, oldDoc, newDoc));
+) => runAggregateSync(() => reviewsByPrNumber.replace(ctx, oldDoc, newDoc));
 
 // ---------------------------------------------------------------------------
 // Workflow Jobs
 // ---------------------------------------------------------------------------
 
 export const syncJobInsert = (ctx: MutCtx, doc: Doc<"github_workflow_jobs">) =>
-	Effect.promise(() => jobsByWorkflowRun.insertIfDoesNotExist(ctx, doc));
+	runAggregateSync(() => jobsByWorkflowRun.insertIfDoesNotExist(ctx, doc));
 
 export const syncJobReplace = (
 	ctx: MutCtx,
 	oldDoc: Doc<"github_workflow_jobs">,
 	newDoc: Doc<"github_workflow_jobs">,
-) => Effect.promise(() => jobsByWorkflowRun.replace(ctx, oldDoc, newDoc));
+) => runAggregateSync(() => jobsByWorkflowRun.replace(ctx, oldDoc, newDoc));
 
 // ---------------------------------------------------------------------------
 // Webhook Events
@@ -131,15 +148,15 @@ export const syncJobReplace = (
 export const syncWebhookInsert = (
 	ctx: MutCtx,
 	doc: Doc<"github_webhook_events_raw">,
-) => Effect.promise(() => webhooksByState.insertIfDoesNotExist(ctx, doc));
+) => runAggregateSync(() => webhooksByState.insertIfDoesNotExist(ctx, doc));
 
 export const syncWebhookReplace = (
 	ctx: MutCtx,
 	oldDoc: Doc<"github_webhook_events_raw">,
 	newDoc: Doc<"github_webhook_events_raw">,
-) => Effect.promise(() => webhooksByState.replace(ctx, oldDoc, newDoc));
+) => runAggregateSync(() => webhooksByState.replace(ctx, oldDoc, newDoc));
 
 export const syncWebhookDelete = (
 	ctx: MutCtx,
 	doc: Doc<"github_webhook_events_raw">,
-) => Effect.promise(() => webhooksByState.delete(ctx, doc));
+) => runAggregateSync(() => webhooksByState.delete(ctx, doc));

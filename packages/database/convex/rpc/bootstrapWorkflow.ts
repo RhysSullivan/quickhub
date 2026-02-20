@@ -26,13 +26,15 @@ export const bootstrapRepo = workflow.define({
 		repositoryId: v.number(),
 		fullName: v.string(),
 		lockKey: v.string(),
-		/** better-auth user ID whose GitHub OAuth token should be used. */
-		connectedByUserId: v.string(),
+		/** better-auth user ID whose GitHub OAuth token should be used. Null for App-installed repos. */
+		connectedByUserId: v.union(v.string(), v.null()),
+		/** GitHub App installation ID for fallback token resolution. */
+		installationId: v.number(),
 	},
 	handler: async (step, args): Promise<void> => {
 		const s = internal.rpc.bootstrapSteps;
 		const progress = internal.rpc.bootstrapWorkflow.updateSyncProgress;
-		const { connectedByUserId } = args;
+		const { connectedByUserId, installationId } = args;
 
 		// Mark job as running
 		await step.runMutation(internal.rpc.bootstrapWorkflow.markSyncJob, {
@@ -52,6 +54,7 @@ export const bootstrapRepo = workflow.define({
 				repositoryId: args.repositoryId,
 				fullName: args.fullName,
 				connectedByUserId,
+				installationId,
 			},
 			{ name: "fetch-branches" },
 		);
@@ -83,6 +86,7 @@ export const bootstrapRepo = workflow.define({
 							fullName: args.fullName,
 							cursor: prCursor,
 							connectedByUserId,
+							installationId,
 						},
 						{ name: `fetch-prs-${chunkIndex}` },
 					);
@@ -125,6 +129,7 @@ export const bootstrapRepo = workflow.define({
 							fullName: args.fullName,
 							cursor: issueCursor,
 							connectedByUserId,
+							installationId,
 						},
 						{ name: `fetch-issues-${chunkIndex}` },
 					);
@@ -158,6 +163,7 @@ export const bootstrapRepo = workflow.define({
 				repositoryId: args.repositoryId,
 				fullName: args.fullName,
 				connectedByUserId,
+				installationId,
 			},
 			{ name: "fetch-commits" },
 		);
@@ -176,7 +182,7 @@ export const bootstrapRepo = workflow.define({
 		});
 		const openPrTargets = await step.runAction(
 			s.getOpenPrSyncTargets,
-			{ repositoryId: args.repositoryId, connectedByUserId },
+			{ repositoryId: args.repositoryId, connectedByUserId, installationId },
 			{ name: "get-open-pr-targets" },
 		);
 
@@ -199,6 +205,7 @@ export const bootstrapRepo = workflow.define({
 						fullName: args.fullName,
 						headShas: shaChunk,
 						connectedByUserId,
+						installationId,
 					},
 					{ name: `fetch-check-runs-${chunkIdx}` },
 				);
@@ -228,6 +235,7 @@ export const bootstrapRepo = workflow.define({
 				repositoryId: args.repositoryId,
 				fullName: args.fullName,
 				connectedByUserId,
+				installationId,
 			},
 			{ name: "fetch-workflow-runs" },
 		);
@@ -250,6 +258,7 @@ export const bootstrapRepo = workflow.define({
 					fullName: args.fullName,
 					openPrSyncTargets: openPrTargets,
 					connectedByUserId,
+					installationId,
 				},
 				{ name: "schedule-pr-file-syncs" },
 			);
@@ -281,7 +290,8 @@ export const startBootstrap = internalMutation({
 		repositoryId: v.number(),
 		fullName: v.string(),
 		lockKey: v.string(),
-		connectedByUserId: v.string(),
+		connectedByUserId: v.union(v.string(), v.null()),
+		installationId: v.number(),
 	},
 	returns: v.null(),
 	handler: async (ctx, args): Promise<null> => {
@@ -293,6 +303,7 @@ export const startBootstrap = internalMutation({
 				fullName: args.fullName,
 				lockKey: args.lockKey,
 				connectedByUserId: args.connectedByUserId,
+				installationId: args.installationId,
 			},
 			{
 				onComplete: internal.rpc.bootstrapWorkflow.onBootstrapComplete,

@@ -46,12 +46,11 @@ crons.interval(
 	{},
 );
 
-// Repair all projection views from normalized tables every 5 minutes
-// Catches any drift between normalized data and denormalized views
+// Refresh stale GitHub permission snapshots every hour
 crons.interval(
-	"repair projection views",
-	{ minutes: 5 },
-	internal.rpc.admin.repairProjections,
+	"refresh stale github permissions",
+	{ hours: 1 },
+	internal.rpc.githubActions.syncStalePermissions,
 	{},
 );
 

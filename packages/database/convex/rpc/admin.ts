@@ -10,7 +10,6 @@ import {
 	reviewsByPrNumber,
 	webhooksByState,
 } from "../shared/aggregates";
-import { updateRepoOverview } from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -57,10 +56,8 @@ const syncJobStatusDef = factory.query({
 });
 
 /**
- * Rebuild all projection views from normalized tables.
- * Iterates all connected repositories and runs updateAllProjections on each.
- * Scheduled via cron on a slow cadence (e.g. every 5 minutes) to catch any
- * drift between normalized data and projection views.
+ * Legacy projection repair endpoint. Now a no-op since materialized
+ * projection tables have been removed.
  */
 const repairProjectionsDef = factory.internalMutation({
 	success: Schema.Struct({
@@ -233,20 +230,9 @@ syncJobStatusDef.implement(() =>
 );
 
 repairProjectionsDef.implement(() =>
-	Effect.gen(function* () {
-		const ctx = yield* ConfectMutationCtx;
-		// Only repair the overview counters. The individual view tables
-		// (PR list, issue list, workflow runs) are now maintained incrementally
-		// via per-entity upserts in bootstrapWrite and webhookProcessor.
-		// Doing a full rebuild here would be too expensive for large repos.
-		const repos = yield* ctx.db.query("github_repositories").collect();
-		let repairedRepoCount = 0;
-		for (const repo of repos) {
-			yield* updateRepoOverview(repo.githubRepoId).pipe(Effect.ignoreLogged);
-			repairedRepoCount++;
-		}
-		return { repairedRepoCount };
-	}),
+	// Materialized projection tables have been removed.
+	// This endpoint is kept as a no-op for backward compatibility (cron reference).
+	Effect.succeed({ repairedRepoCount: 0 }),
 );
 
 queueHealthDef.implement(() =>
@@ -354,9 +340,8 @@ systemStatusDef.implement(() =>
 			(o) => o.state === "confirmed",
 		).length;
 
-		// -- Projection staleness --
+		// -- Projection staleness (materialized views removed) --
 		const repos = yield* ctx.db.query("github_repositories").take(cap);
-		const overviews = yield* ctx.db.query("view_repo_overview").take(cap);
 
 		return {
 			queue: {
@@ -378,9 +363,9 @@ systemStatusDef.implement(() =>
 				confirmed: writeOpsConfirmed,
 			},
 			projections: {
-				overviewCount: overviews.length,
+				overviewCount: repos.length,
 				repoCount: repos.length,
-				allSynced: overviews.length >= repos.length,
+				allSynced: true,
 			},
 		};
 	}),

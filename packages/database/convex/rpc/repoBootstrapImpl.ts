@@ -578,6 +578,7 @@ bootstrapRepoDef.implement((args) =>
 						pullRequestNumber: pr.pullRequestNumber,
 						headSha: pr.headSha,
 						connectedByUserId: args.connectedByUserId,
+						installationId: 0,
 					}),
 				);
 			}

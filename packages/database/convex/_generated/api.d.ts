@@ -34,6 +34,7 @@ import type * as shared_aggregates from "../shared/aggregates.js";
 import type * as shared_githubApi from "../shared/githubApi.js";
 import type * as shared_githubApp from "../shared/githubApp.js";
 import type * as shared_githubToken from "../shared/githubToken.js";
+import type * as shared_permissions from "../shared/permissions.js";
 import type * as shared_projections from "../shared/projections.js";
 import type * as shared_rateLimiter from "../shared/rateLimiter.js";
 import type * as shared_webhookVerify from "../shared/webhookVerify.js";
@@ -72,6 +73,7 @@ declare const fullApi: ApiFromModules<{
   "shared/githubApi": typeof shared_githubApi;
   "shared/githubApp": typeof shared_githubApp;
   "shared/githubToken": typeof shared_githubToken;
+  "shared/permissions": typeof shared_permissions;
   "shared/projections": typeof shared_projections;
   "shared/rateLimiter": typeof shared_rateLimiter;
   "shared/webhookVerify": typeof shared_webhookVerify;

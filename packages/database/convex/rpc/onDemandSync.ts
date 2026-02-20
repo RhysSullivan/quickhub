@@ -8,7 +8,7 @@
  * Flow for PR:
  *   1. Look up (or create) the repo record
  *   2. Fetch the single PR from GitHub API
- *   3. Fetch PR comments, reviews, check runs
+ *   3. Fetch PR timeline comments, reviews, review comments, check runs
  *   4. Upsert all data + users
  *   5. Schedule syncPrFiles for diff data
  *   6. Update projections
@@ -35,7 +35,6 @@ import {
 	GitHubRateLimitError,
 } from "../shared/githubApi";
 import { lookupGitHubTokenByUserIdConfect } from "../shared/githubToken";
-import { updateAllProjections } from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -338,6 +337,87 @@ upsertPrReviewsDef.implement((args) =>
 );
 
 // ---------------------------------------------------------------------------
+// Internal mutation: upsert PR review comments (inline comments)
+// ---------------------------------------------------------------------------
+
+const upsertPrReviewCommentsDef = factory.internalMutation({
+	payload: {
+		repositoryId: Schema.Number,
+		prNumber: Schema.Number,
+		reviewComments: Schema.Array(
+			Schema.Struct({
+				githubReviewCommentId: Schema.Number,
+				githubReviewId: Schema.NullOr(Schema.Number),
+				inReplyToGithubReviewCommentId: Schema.NullOr(Schema.Number),
+				authorUserId: Schema.NullOr(Schema.Number),
+				body: Schema.String,
+				path: Schema.NullOr(Schema.String),
+				line: Schema.NullOr(Schema.Number),
+				originalLine: Schema.NullOr(Schema.Number),
+				startLine: Schema.NullOr(Schema.Number),
+				side: Schema.NullOr(Schema.String),
+				startSide: Schema.NullOr(Schema.String),
+				commitSha: Schema.NullOr(Schema.String),
+				originalCommitSha: Schema.NullOr(Schema.String),
+				htmlUrl: Schema.NullOr(Schema.String),
+				createdAt: Schema.Number,
+				updatedAt: Schema.Number,
+			}),
+		),
+	},
+	success: Schema.Struct({ upserted: Schema.Number }),
+});
+
+upsertPrReviewCommentsDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectMutationCtx;
+		let upserted = 0;
+
+		for (const reviewComment of args.reviewComments) {
+			const existing = yield* ctx.db
+				.query("github_pull_request_review_comments")
+				.withIndex("by_repositoryId_and_githubReviewCommentId", (q) =>
+					q
+						.eq("repositoryId", args.repositoryId)
+						.eq("githubReviewCommentId", reviewComment.githubReviewCommentId),
+				)
+				.first();
+
+			const data = {
+				repositoryId: args.repositoryId,
+				pullRequestNumber: args.prNumber,
+				githubReviewCommentId: reviewComment.githubReviewCommentId,
+				githubReviewId: reviewComment.githubReviewId,
+				inReplyToGithubReviewCommentId:
+					reviewComment.inReplyToGithubReviewCommentId,
+				authorUserId: reviewComment.authorUserId,
+				body: reviewComment.body,
+				path: reviewComment.path,
+				line: reviewComment.line,
+				originalLine: reviewComment.originalLine,
+				startLine: reviewComment.startLine,
+				side: reviewComment.side,
+				startSide: reviewComment.startSide,
+				commitSha: reviewComment.commitSha,
+				originalCommitSha: reviewComment.originalCommitSha,
+				htmlUrl: reviewComment.htmlUrl,
+				createdAt: reviewComment.createdAt,
+				updatedAt: reviewComment.updatedAt,
+			};
+
+			if (Option.isSome(existing)) {
+				yield* ctx.db.patch(existing.value._id, data);
+			} else {
+				yield* ctx.db.insert("github_pull_request_review_comments", data);
+			}
+			upserted++;
+		}
+
+		return { upserted };
+	}),
+);
+
+// ---------------------------------------------------------------------------
 // Internal mutation: write data + update projections
 // ---------------------------------------------------------------------------
 
@@ -348,11 +428,10 @@ const writeAndProjectDef = factory.internalMutation({
 	success: Schema.Struct({ ok: Schema.Boolean }),
 });
 
-writeAndProjectDef.implement((args) =>
-	Effect.gen(function* () {
-		yield* updateAllProjections(args.repositoryId);
-		return { ok: true };
-	}),
+writeAndProjectDef.implement(() =>
+	// Materialized projections have been removed.
+	// This endpoint is kept for backward compatibility (callers still reference it).
+	Effect.succeed({ ok: true }),
 );
 
 // ---------------------------------------------------------------------------
@@ -692,7 +771,49 @@ syncPullRequestDef.implement((args) =>
 			});
 		}
 
-		// 6. Fetch check runs for the PR's head SHA
+		// 6. Fetch review comments (inline PR comments)
+		const rawReviewComments = yield* gh
+			.use(async (fetch) => {
+				const res = await fetch(
+					`/repos/${fullName}/pulls/${args.number}/comments?per_page=100`,
+				);
+				if (!res.ok) return [];
+				return (await res.json()) as Array<Record<string, unknown>>;
+			})
+			.pipe(
+				Effect.catchAll(() =>
+					Effect.succeed([] as Array<Record<string, unknown>>),
+				),
+			);
+
+		const reviewComments = rawReviewComments.map((c) => ({
+			githubReviewCommentId: num(c.id) ?? 0,
+			githubReviewId: num(c.pull_request_review_id),
+			inReplyToGithubReviewCommentId: num(c.in_reply_to_id),
+			authorUserId: users.collect(c.user),
+			body: str(c.body) ?? "",
+			path: str(c.path),
+			line: num(c.line),
+			originalLine: num(c.original_line),
+			startLine: num(c.start_line),
+			side: str(c.side),
+			startSide: str(c.start_side),
+			commitSha: str(c.commit_id),
+			originalCommitSha: str(c.original_commit_id),
+			htmlUrl: str(c.html_url),
+			createdAt: isoToMs(c.created_at) ?? Date.now(),
+			updatedAt: isoToMs(c.updated_at) ?? Date.now(),
+		}));
+
+		if (reviewComments.length > 0) {
+			yield* ctx.runMutation(internal.rpc.onDemandSync.upsertPrReviewComments, {
+				repositoryId,
+				prNumber: args.number,
+				reviewComments,
+			});
+		}
+
+		// 7. Fetch check runs for the PR's head SHA
 		if (pr.headSha !== "") {
 			const rawCheckRuns = yield* gh
 				.use(async (fetch) => {
@@ -748,7 +869,7 @@ syncPullRequestDef.implement((args) =>
 			}
 		}
 
-		// 7. Upsert collected users
+		// 8. Upsert collected users
 		const allUsers = users.getUsers();
 		if (allUsers.length > 0) {
 			yield* ctx.runMutation(internal.rpc.bootstrapWrite.upsertUsers, {
@@ -756,12 +877,12 @@ syncPullRequestDef.implement((args) =>
 			});
 		}
 
-		// 8. Update projections
+		// 9. Update projections
 		yield* ctx.runMutation(internal.rpc.onDemandSync.writeAndProject, {
 			repositoryId,
 		});
 
-		// 9. Schedule PR file sync for diff data
+		// 10. Schedule PR file sync for diff data
 		if (pr.headSha !== "") {
 			yield* Effect.promise(() =>
 				ctx.scheduler.runAfter(0, internal.rpc.githubActions.syncPrFiles, {
@@ -771,6 +892,7 @@ syncPullRequestDef.implement((args) =>
 					pullRequestNumber: args.number,
 					headSha: pr.headSha,
 					connectedByUserId: userId,
+					installationId: 0,
 				}),
 			);
 		}
@@ -1066,6 +1188,7 @@ const onDemandSyncModule = makeRpcModule(
 		ensureRepo: ensureRepoDef,
 		upsertPrComments: upsertPrCommentsDef,
 		upsertPrReviews: upsertPrReviewsDef,
+		upsertPrReviewComments: upsertPrReviewCommentsDef,
 		writeAndProject: writeAndProjectDef,
 		checkEntityExists: checkEntityExistsDef,
 	},
@@ -1078,6 +1201,7 @@ export const {
 	ensureRepo,
 	upsertPrComments,
 	upsertPrReviews,
+	upsertPrReviewComments,
 	writeAndProject,
 	checkEntityExists,
 } = onDemandSyncModule.handlers;

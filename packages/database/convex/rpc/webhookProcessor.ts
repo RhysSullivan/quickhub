@@ -1,6 +1,6 @@
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
 import { Effect, Match, Option, Schema } from "effect";
-import { internal } from "../_generated/api";
+import { components, internal } from "../_generated/api";
 import { ConfectMutationCtx, ConfectQueryCtx, confectSchema } from "../confect";
 import {
 	syncCheckRunInsert,
@@ -20,10 +20,7 @@ import {
 	syncWebhookReplace,
 } from "../shared/aggregateSync";
 import { webhooksByState } from "../shared/aggregates";
-import {
-	appendActivityFeedEntry,
-	updateAllProjections,
-} from "../shared/projections";
+import { appendActivityFeedEntry } from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -522,6 +519,81 @@ const handlePullRequestReviewEvent = (
 	});
 
 /**
+ * Handle `pull_request_review_comment` events: created, edited, deleted
+ */
+const handlePullRequestReviewCommentEvent = (
+	payload: Record<string, unknown>,
+	repositoryId: number,
+) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectMutationCtx;
+		const now = Date.now();
+		const action = str(payload.action);
+		const comment = obj(payload.comment);
+		const pr = obj(payload.pull_request);
+		const githubReviewCommentId = num(comment.id);
+		const pullRequestNumber = num(pr.number);
+
+		if (githubReviewCommentId === null || pullRequestNumber === null) return;
+
+		// Upsert comment author
+		const authorUser = extractUser(comment.user);
+		if (authorUser) yield* upsertUser(authorUser);
+
+		if (action === "deleted") {
+			const existing = yield* ctx.db
+				.query("github_pull_request_review_comments")
+				.withIndex("by_repositoryId_and_githubReviewCommentId", (q) =>
+					q
+						.eq("repositoryId", repositoryId)
+						.eq("githubReviewCommentId", githubReviewCommentId),
+				)
+				.first();
+
+			if (Option.isSome(existing)) {
+				yield* ctx.db.delete(existing.value._id);
+			}
+			return;
+		}
+
+		const data = {
+			repositoryId,
+			pullRequestNumber,
+			githubReviewCommentId,
+			githubReviewId: num(comment.pull_request_review_id),
+			inReplyToGithubReviewCommentId: num(comment.in_reply_to_id),
+			authorUserId: authorUser?.githubUserId ?? null,
+			body: str(comment.body) ?? "",
+			path: str(comment.path),
+			line: num(comment.line),
+			originalLine: num(comment.original_line),
+			startLine: num(comment.start_line),
+			side: str(comment.side),
+			startSide: str(comment.start_side),
+			commitSha: str(comment.commit_id),
+			originalCommitSha: str(comment.original_commit_id),
+			htmlUrl: str(comment.html_url),
+			createdAt: isoToMs(comment.created_at) ?? now,
+			updatedAt: isoToMs(comment.updated_at) ?? now,
+		};
+
+		const existing = yield* ctx.db
+			.query("github_pull_request_review_comments")
+			.withIndex("by_repositoryId_and_githubReviewCommentId", (q) =>
+				q
+					.eq("repositoryId", repositoryId)
+					.eq("githubReviewCommentId", githubReviewCommentId),
+			)
+			.first();
+
+		if (Option.isSome(existing)) {
+			yield* ctx.db.patch(existing.value._id, data);
+		} else {
+			yield* ctx.db.insert("github_pull_request_review_comments", data);
+		}
+	});
+
+/**
  * Handle `create` events — new branch or tag created
  */
 const handleCreateEvent = (
@@ -786,7 +858,50 @@ const handleInstallationEvent = (
 				.first();
 
 			if (action === "created") {
-				if (Option.isNone(existing)) {
+				// Check for a placeholder installation (installationId: 0) for this owner
+				// created by manual repo-add. If found, upgrade it to the real installation.
+				const placeholder = yield* ctx.db
+					.query("github_installations")
+					.withIndex("by_accountLogin", (q) =>
+						q.eq("accountLogin", accountLogin),
+					)
+					.first();
+
+				if (
+					Option.isSome(placeholder) &&
+					placeholder.value.installationId === 0
+				) {
+					// Upgrade the placeholder to a real installation
+					yield* ctx.db.patch(placeholder.value._id, {
+						installationId,
+						accountId,
+						accountType,
+						suspendedAt: null,
+						permissionsDigest: JSON.stringify(obj(installation.permissions)),
+						eventsDigest: JSON.stringify(installation.events ?? []),
+						updatedAt: now,
+					});
+
+					// Also upgrade all repos that have installationId: 0 for this owner
+					const placeholderRepos = yield* ctx.db
+						.query("github_repositories")
+						.withIndex("by_ownerLogin_and_name", (q) =>
+							q.eq("ownerLogin", accountLogin),
+						)
+						.collect();
+
+					for (const repo of placeholderRepos) {
+						if (repo.installationId === 0) {
+							yield* ctx.db.patch(repo._id, {
+								installationId,
+							});
+						}
+					}
+
+					console.info(
+						`[webhookProcessor] Upgraded placeholder installation for ${accountLogin} -> ${installationId}`,
+					);
+				} else if (Option.isNone(existing)) {
 					yield* ctx.db.insert("github_installations", {
 						installationId,
 						accountId,
@@ -848,7 +963,9 @@ const handleInstallationEvent = (
 					)
 					.first();
 
-				if (Option.isNone(existingRepo)) {
+				const isNewRepo = Option.isNone(existingRepo);
+
+				if (isNewRepo) {
 					yield* ctx.db.insert("github_repositories", {
 						githubRepoId,
 						installationId,
@@ -867,6 +984,46 @@ const handleInstallationEvent = (
 						cachedAt: now,
 						connectedByUserId: null,
 					});
+
+					// Create sync job + start bootstrap workflow for the new repo.
+					// Uses the installation token (no user session available from webhooks).
+					const lockKey = `repo-bootstrap:${installationId}:${githubRepoId}`;
+					const existingJob = yield* ctx.db
+						.query("github_sync_jobs")
+						.withIndex("by_lockKey", (q) => q.eq("lockKey", lockKey))
+						.first();
+
+					if (Option.isNone(existingJob)) {
+						yield* ctx.db.insert("github_sync_jobs", {
+							jobType: "backfill" as const,
+							scopeType: "repository" as const,
+							triggerReason: "install" as const,
+							lockKey,
+							installationId,
+							repositoryId: githubRepoId,
+							entityType: null,
+							state: "pending" as const,
+							attemptCount: 0,
+							nextRunAt: now,
+							lastError: null,
+							currentStep: null,
+							completedSteps: [],
+							itemsFetched: 0,
+							createdAt: now,
+							updatedAt: now,
+						});
+
+						yield* ctx.runMutation(
+							internal.rpc.bootstrapWorkflow.startBootstrap,
+							{
+								repositoryId: githubRepoId,
+								fullName,
+								lockKey,
+								connectedByUserId: null,
+								installationId,
+							},
+						);
+					}
 				} else {
 					yield* ctx.db.patch(existingRepo.value._id, {
 						installationId,
@@ -921,6 +1078,9 @@ const dispatchHandler = (
 		Match.when("push", () => handlePushEvent(payload, repositoryId)),
 		Match.when("pull_request_review", () =>
 			handlePullRequestReviewEvent(payload, repositoryId),
+		),
+		Match.when("pull_request_review_comment", () =>
+			handlePullRequestReviewCommentEvent(payload, repositoryId),
 		),
 		Match.when("check_run", () => handleCheckRunEvent(payload, repositoryId)),
 		Match.when("workflow_run", () =>
@@ -1033,6 +1193,19 @@ const extractActivityInfo = (
 				activityType: `pr_review.${state}`,
 				title: str(pr.title) ?? "",
 				description: null,
+				actorLogin,
+				actorAvatarUrl,
+				entityNumber: number,
+			};
+		}),
+		Match.when("pull_request_review_comment", () => {
+			const pr = obj(payload.pull_request);
+			const comment = obj(payload.comment);
+			const number = num(pr.number);
+			return {
+				activityType: `pr_review_comment.${action ?? "created"}`,
+				title: str(pr.title) ?? "",
+				description: str(comment.body)?.slice(0, 200) ?? null,
 				actorLogin,
 				actorAvatarUrl,
 				entityNumber: number,
@@ -1273,8 +1446,6 @@ const afterSuccessfulProcessing = (
 			).pipe(Effect.ignoreLogged);
 		}
 
-		yield* updateAllProjections(repositoryId).pipe(Effect.ignoreLogged);
-
 		// Schedule PR file diff sync for relevant PR events
 		if (
 			event.eventName === "pull_request" &&
@@ -1293,6 +1464,10 @@ const afterSuccessfulProcessing = (
 			payload,
 			repositoryId,
 		).pipe(Effect.ignoreLogged);
+
+		yield* scheduleMemberPermissionSync(event.eventName, payload).pipe(
+			Effect.ignoreLogged,
+		);
 	});
 
 /**
@@ -1320,15 +1495,19 @@ const schedulePrFileSync = (
 		const ownerLogin = parts[0];
 		const name = parts[1];
 
-		// Look up the repo's connectedByUserId for the GitHub token
+		// Look up the repo's connectedByUserId and installationId for token resolution
 		const repoDoc = yield* ctx.db
 			.query("github_repositories")
 			.withIndex("by_githubRepoId", (q) => q.eq("githubRepoId", repositoryId))
 			.first();
 		const connectedByUserId = Option.isSome(repoDoc)
-			? repoDoc.value.connectedByUserId
+			? (repoDoc.value.connectedByUserId ?? null)
 			: null;
-		if (!connectedByUserId) return;
+		const installationId = Option.isSome(repoDoc)
+			? repoDoc.value.installationId
+			: 0;
+		// Need at least one token source
+		if (!connectedByUserId && installationId <= 0) return;
 
 		yield* Effect.promise(() =>
 			ctx.scheduler.runAfter(0, internal.rpc.githubActions.syncPrFiles, {
@@ -1338,8 +1517,51 @@ const schedulePrFileSync = (
 				pullRequestNumber: prNumber,
 				headSha,
 				connectedByUserId,
+				installationId,
 			}),
 		);
+	});
+
+/**
+ * For `member` webhook events, sync permissions for the affected user
+ * if they have linked a GitHub account in Better Auth.
+ */
+const scheduleMemberPermissionSync = (
+	eventName: string,
+	payload: Record<string, unknown>,
+) =>
+	Effect.gen(function* () {
+		if (eventName !== "member") return;
+
+		const ctx = yield* ConfectMutationCtx;
+		const member = obj(payload.member);
+		const memberId = num(member.id);
+		if (memberId === null) return;
+
+		const account = yield* ctx.runQuery(components.betterAuth.adapter.findOne, {
+			model: "account",
+			where: [
+				{ field: "providerId", value: "github" },
+				{ field: "accountId", value: String(memberId) },
+			],
+		});
+
+		if (
+			account !== null &&
+			typeof account === "object" &&
+			"userId" in account &&
+			typeof account.userId === "string"
+		) {
+			yield* Effect.promise(() =>
+				ctx.scheduler.runAfter(
+					0,
+					internal.rpc.githubActions.syncUserPermissions,
+					{
+						userId: account.userId,
+					},
+				),
+			);
+		}
 	});
 
 // ---------------------------------------------------------------------------
@@ -1668,14 +1890,34 @@ getQueueHealthDef.implement(() =>
 		const ctx = yield* ConfectQueryCtx;
 		const raw = ctx.rawCtx;
 
+		const countByState = (state: "pending" | "retry" | "failed") =>
+			Effect.tryPromise({
+				try: () => webhooksByState.count(raw, { namespace: state }),
+				catch: (error) => new Error(String(error)),
+			}).pipe(
+				Effect.catchAll((error) => {
+					if (
+						error.message.includes('Component "') &&
+						error.message.includes("is not registered")
+					) {
+						return ctx.db
+							.query("github_webhook_events_raw")
+							.withIndex("by_processState_and_receivedAt", (q) =>
+								q.eq("processState", state),
+							)
+							.take(10001)
+							.pipe(Effect.map((items) => Math.min(items.length, 10000)));
+					}
+					return Effect.die(error);
+				}),
+			);
+
 		// O(log n) counts via webhooksByState aggregate
-		const [pending, retry, failed] = yield* Effect.promise(() =>
-			Promise.all([
-				webhooksByState.count(raw, { namespace: "pending" }),
-				webhooksByState.count(raw, { namespace: "retry" }),
-				webhooksByState.count(raw, { namespace: "failed" }),
-			]),
-		);
+		const [pending, retry, failed] = yield* Effect.all([
+			countByState("pending"),
+			countByState("retry"),
+			countByState("failed"),
+		]);
 
 		const deadLetters = yield* ctx.db
 			.query("github_dead_letters")

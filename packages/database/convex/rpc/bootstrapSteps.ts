@@ -23,7 +23,10 @@ import { internal } from "../_generated/api";
 import type { ActionCtx } from "../_generated/server";
 import { internalAction } from "../_generated/server";
 import { GitHubApiClient, GitHubApiError } from "../shared/githubApi";
-import { lookupGitHubTokenByUserId } from "../shared/githubToken";
+import {
+	lookupGitHubTokenByUserId,
+	resolveRepoToken,
+} from "../shared/githubToken";
 
 // ---------------------------------------------------------------------------
 // GitHub response parsing helpers
@@ -95,35 +98,47 @@ const createUserCollector = () => {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a GitHubApiClient from the user's OAuth token, then run an
- * Effect that requires `GitHubApiClient` in its environment.
+ * Auth args passed to every bootstrap step.
+ * Either `connectedByUserId` (user OAuth token) or `installationId` (App token)
+ * or both — `resolveRepoToken` tries user first, then falls back to App.
+ */
+type TokenArgs = {
+	connectedByUserId: string | null;
+	installationId: number;
+};
+
+/**
+ * Resolve the best available token, then run an Effect that requires
+ * `GitHubApiClient` in its environment.
  */
 const runWithGitHub = <A>(
 	ctx: ActionCtx,
-	connectedByUserId: string,
+	tokenArgs: TokenArgs,
 	effect: Effect.Effect<A, never, GitHubApiClient>,
 ): Promise<A> =>
 	Effect.runPromise(
 		Effect.gen(function* () {
-			const token = yield* lookupGitHubTokenByUserId(
+			const token = yield* resolveRepoToken(
 				ctx.runQuery,
-				connectedByUserId,
+				tokenArgs.connectedByUserId,
+				tokenArgs.installationId,
 			);
 			return yield* Effect.provide(effect, GitHubApiClient.fromToken(token));
 		}).pipe(Effect.orDie),
 	);
 
 /**
- * Resolve a GitHubApiClient service instance from a connectedByUserId.
+ * Resolve a GitHubApiClient service instance.
  * Returns the client directly so callers can use it across multiple
  * paginated calls without re-resolving the token each time.
  */
-const resolveGitHubClient = (ctx: ActionCtx, connectedByUserId: string) =>
+const resolveGitHubClient = (ctx: ActionCtx, tokenArgs: TokenArgs) =>
 	Effect.runPromise(
 		Effect.gen(function* () {
-			const token = yield* lookupGitHubTokenByUserId(
+			const token = yield* resolveRepoToken(
 				ctx.runQuery,
-				connectedByUserId,
+				tokenArgs.connectedByUserId,
+				tokenArgs.installationId,
 			);
 			return yield* Effect.provide(
 				GitHubApiClient,
@@ -154,6 +169,25 @@ const writeUsers = async (ctx: ActionCtx, users: Array<CollectedUser>) => {
  */
 const PAGES_PER_CHUNK = 10;
 
+/**
+ * Common Convex validator args for token resolution.
+ * Every step accepts these so the workflow can pass either a user token
+ * or an installation token (or both — the resolver tries user first).
+ */
+const tokenArgs = {
+	connectedByUserId: v.union(v.string(), v.null()),
+	installationId: v.number(),
+};
+
+/** Extract TokenArgs from step args. */
+const toTokenArgs = (args: {
+	connectedByUserId: string | null;
+	installationId: number;
+}): TokenArgs => ({
+	connectedByUserId: args.connectedByUserId,
+	installationId: args.installationId,
+});
+
 // ---------------------------------------------------------------------------
 // Step 1: Fetch branches
 // ---------------------------------------------------------------------------
@@ -162,13 +196,13 @@ export const fetchBranches = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
-		connectedByUserId: v.string(),
+		...tokenArgs,
 	},
 	returns: v.object({ count: v.number() }),
 	handler: async (ctx, args): Promise<{ count: number }> => {
 		const rawBranches = await runWithGitHub(
 			ctx,
-			args.connectedByUserId,
+			toTokenArgs(args),
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
 				return yield* gh.use(async (fetch) => {
@@ -217,7 +251,7 @@ export const fetchPullRequestsChunk = internalAction({
 		fullName: v.string(),
 		/** The GitHub API URL for this chunk, or null to start from page 1. */
 		cursor: v.union(v.string(), v.null()),
-		connectedByUserId: v.string(),
+		...tokenArgs,
 	},
 	returns: v.object({
 		count: v.number(),
@@ -234,7 +268,7 @@ export const fetchPullRequestsChunk = internalAction({
 		const { collectUser, getUsers } = createUserCollector();
 		let totalCount = 0;
 
-		const gh = await resolveGitHubClient(ctx, args.connectedByUserId);
+		const gh = await resolveGitHubClient(ctx, toTokenArgs(args));
 
 		let url: string | null =
 			args.cursor ?? `/repos/${args.fullName}/pulls?state=all&per_page=100`;
@@ -325,7 +359,7 @@ export const fetchIssuesChunk = internalAction({
 		fullName: v.string(),
 		/** The GitHub API URL for this chunk, or null to start from page 1. */
 		cursor: v.union(v.string(), v.null()),
-		connectedByUserId: v.string(),
+		...tokenArgs,
 	},
 	returns: v.object({
 		count: v.number(),
@@ -342,7 +376,7 @@ export const fetchIssuesChunk = internalAction({
 		const { collectUser, getUsers } = createUserCollector();
 		let totalCount = 0;
 
-		const gh = await resolveGitHubClient(ctx, args.connectedByUserId);
+		const gh = await resolveGitHubClient(ctx, toTokenArgs(args));
 
 		let url: string | null =
 			args.cursor ?? `/repos/${args.fullName}/issues?state=all&per_page=100`;
@@ -435,7 +469,7 @@ export const fetchCommits = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
-		connectedByUserId: v.string(),
+		...tokenArgs,
 	},
 	returns: v.object({ count: v.number() }),
 	handler: async (ctx, args): Promise<{ count: number }> => {
@@ -443,7 +477,7 @@ export const fetchCommits = internalAction({
 
 		const allCommits = await runWithGitHub(
 			ctx,
-			args.connectedByUserId,
+			toTokenArgs(args),
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
 				return yield* gh.use(async (fetch) => {
@@ -524,13 +558,13 @@ export const fetchCheckRunsChunk = internalAction({
 		repositoryId: v.number(),
 		fullName: v.string(),
 		headShas: v.array(v.string()),
-		connectedByUserId: v.string(),
+		...tokenArgs,
 	},
 	returns: v.object({ count: v.number() }),
 	handler: async (ctx, args): Promise<{ count: number }> => {
 		const allCheckRuns = await runWithGitHub(
 			ctx,
-			args.connectedByUserId,
+			toTokenArgs(args),
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
 				const results: Array<{
@@ -626,7 +660,7 @@ export const fetchWorkflowRuns = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
-		connectedByUserId: v.string(),
+		...tokenArgs,
 	},
 	returns: v.object({
 		runCount: v.number(),
@@ -640,7 +674,7 @@ export const fetchWorkflowRuns = internalAction({
 
 		const { workflowRuns, workflowJobs } = await runWithGitHub(
 			ctx,
-			args.connectedByUserId,
+			toTokenArgs(args),
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
 
@@ -826,7 +860,7 @@ export const schedulePrFileSyncs = internalAction({
 				headSha: v.string(),
 			}),
 		),
-		connectedByUserId: v.string(),
+		...tokenArgs,
 	},
 	returns: v.object({ scheduled: v.number() }),
 	handler: async (ctx, args): Promise<{ scheduled: number }> => {
@@ -841,6 +875,7 @@ export const schedulePrFileSyncs = internalAction({
 				pullRequestNumber: pr.pullRequestNumber,
 				headSha: pr.headSha,
 				connectedByUserId: args.connectedByUserId,
+				installationId: args.installationId,
 			});
 		}
 
@@ -856,7 +891,7 @@ export const schedulePrFileSyncs = internalAction({
 export const getOpenPrSyncTargets = internalAction({
 	args: {
 		repositoryId: v.number(),
-		connectedByUserId: v.string(),
+		...tokenArgs,
 	},
 	returns: v.array(
 		v.object({

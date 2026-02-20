@@ -288,6 +288,7 @@ reconcileRepoDef.implement((args) =>
 			fullName: repoDoc.fullName,
 			lockKey,
 			connectedByUserId,
+			installationId: repoDoc.installationId,
 		});
 
 		return { scheduled: true, lockKey };

@@ -204,6 +204,27 @@ const GitHubPullRequestReviewSchema = Schema.Struct({
 	commitSha: Schema.NullOr(Schema.String),
 });
 
+const GitHubPullRequestReviewCommentSchema = Schema.Struct({
+	repositoryId: Schema.Number,
+	pullRequestNumber: Schema.Number,
+	githubReviewCommentId: Schema.Number,
+	githubReviewId: Schema.NullOr(Schema.Number),
+	inReplyToGithubReviewCommentId: Schema.NullOr(Schema.Number),
+	authorUserId: Schema.NullOr(Schema.Number),
+	body: Schema.String,
+	path: Schema.NullOr(Schema.String),
+	line: Schema.NullOr(Schema.Number),
+	originalLine: Schema.NullOr(Schema.Number),
+	startLine: Schema.NullOr(Schema.Number),
+	side: Schema.NullOr(Schema.String),
+	startSide: Schema.NullOr(Schema.String),
+	commitSha: Schema.NullOr(Schema.String),
+	originalCommitSha: Schema.NullOr(Schema.String),
+	htmlUrl: Schema.NullOr(Schema.String),
+	createdAt: Schema.Number,
+	updatedAt: Schema.Number,
+});
+
 const GitHubIssueSchema = Schema.Struct({
 	repositoryId: Schema.Number,
 	githubIssueId: Schema.Number,
@@ -301,72 +322,35 @@ const GitHubWorkflowJobSchema = Schema.Struct({
 });
 
 // ============================================================
-// C) UI Read Projection Tables
+// C) Permissions
 // ============================================================
 
-const ViewRepoOverviewSchema = Schema.Struct({
+const GitHubUserRepoPermissionSchema = Schema.Struct({
+	/** Better Auth user ID */
+	userId: Schema.String,
+	/** GitHub repository ID (matches github_repositories.githubRepoId) */
 	repositoryId: Schema.Number,
-	fullName: Schema.String,
-	ownerLogin: Schema.String,
-	name: Schema.String,
-	openPrCount: Schema.Number,
-	openIssueCount: Schema.Number,
-	failingCheckCount: Schema.Number,
-	lastPushAt: Schema.NullOr(Schema.Number),
-	syncLagSeconds: Schema.NullOr(Schema.Number),
-	updatedAt: Schema.Number,
+	/** GitHub user ID (for cross-referencing) */
+	githubUserId: Schema.Number,
+	/** Read access */
+	pull: Schema.Boolean,
+	/** Manage issues/PRs without write access */
+	triage: Schema.Boolean,
+	/** Write — push code, manage issues/PRs */
+	push: Schema.Boolean,
+	/** Manage settings without destructive access */
+	maintain: Schema.Boolean,
+	/** Full access */
+	admin: Schema.Boolean,
+	/** Role name as returned by GitHub API */
+	roleName: Schema.NullOr(Schema.String),
+	/** When this permission was last synced from GitHub */
+	syncedAt: Schema.Number,
 });
 
-const ViewRepoPullRequestListSchema = Schema.Struct({
-	repositoryId: Schema.Number,
-	githubPrId: Schema.Number,
-	number: Schema.Number,
-	state: Schema.Literal("open", "closed"),
-	draft: Schema.Boolean,
-	title: Schema.String,
-	authorLogin: Schema.NullOr(Schema.String),
-	authorAvatarUrl: Schema.NullOr(Schema.String),
-	headRefName: Schema.String,
-	baseRefName: Schema.String,
-	commentCount: Schema.Number,
-	reviewCount: Schema.Number,
-	lastCheckConclusion: Schema.NullOr(Schema.String),
-	githubUpdatedAt: Schema.Number,
-	sortUpdated: Schema.Number,
-});
-
-const ViewRepoIssueListSchema = Schema.Struct({
-	repositoryId: Schema.Number,
-	githubIssueId: Schema.Number,
-	number: Schema.Number,
-	state: Schema.Literal("open", "closed"),
-	title: Schema.String,
-	authorLogin: Schema.NullOr(Schema.String),
-	authorAvatarUrl: Schema.NullOr(Schema.String),
-	labelNames: Schema.Array(Schema.String),
-	commentCount: Schema.Number,
-	githubUpdatedAt: Schema.Number,
-	sortUpdated: Schema.Number,
-});
-
-const ViewRepoWorkflowRunListSchema = Schema.Struct({
-	repositoryId: Schema.Number,
-	githubRunId: Schema.Number,
-	workflowName: Schema.NullOr(Schema.String),
-	runNumber: Schema.Number,
-	event: Schema.String,
-	status: Schema.NullOr(Schema.String),
-	conclusion: Schema.NullOr(Schema.String),
-	headBranch: Schema.NullOr(Schema.String),
-	headSha: Schema.String,
-	actorLogin: Schema.NullOr(Schema.String),
-	actorAvatarUrl: Schema.NullOr(Schema.String),
-	jobCount: Schema.Number,
-	htmlUrl: Schema.NullOr(Schema.String),
-	createdAt: Schema.Number,
-	updatedAt: Schema.Number,
-	sortUpdated: Schema.Number,
-});
+// ============================================================
+// D) Activity Feed (append-only event log)
+// ============================================================
 
 const ViewActivityFeedSchema = Schema.Struct({
 	repositoryId: Schema.Number,
@@ -472,6 +456,18 @@ export const confectSchema = defineSchema({
 			"githubReviewId",
 		]),
 
+	github_pull_request_review_comments: defineTable(
+		GitHubPullRequestReviewCommentSchema,
+	)
+		.index("by_repositoryId_and_pullRequestNumber", [
+			"repositoryId",
+			"pullRequestNumber",
+		])
+		.index("by_repositoryId_and_githubReviewCommentId", [
+			"repositoryId",
+			"githubReviewCommentId",
+		]),
+
 	github_issues: defineTable(GitHubIssueSchema)
 		.index("by_repositoryId_and_number", ["repositoryId", "number"])
 		.index("by_repositoryId_and_state_and_githubUpdatedAt", [
@@ -514,39 +510,15 @@ export const confectSchema = defineSchema({
 		.index("by_repositoryId_and_githubJobId", ["repositoryId", "githubJobId"])
 		.index("by_repositoryId_and_githubRunId", ["repositoryId", "githubRunId"]),
 
-	// C) UI Read Projections
-	view_repo_overview: defineTable(ViewRepoOverviewSchema).index(
-		"by_repositoryId",
-		["repositoryId"],
-	),
+	// C) Permissions
+	github_user_repo_permissions: defineTable(GitHubUserRepoPermissionSchema)
+		.index("by_userId_and_repositoryId", ["userId", "repositoryId"])
+		.index("by_repositoryId", ["repositoryId"])
+		.index("by_userId", ["userId"])
+		.index("by_userId_and_syncedAt", ["userId", "syncedAt"])
+		.index("by_syncedAt", ["syncedAt"]),
 
-	view_repo_pull_request_list: defineTable(ViewRepoPullRequestListSchema)
-		.index("by_repositoryId_and_sortUpdated", ["repositoryId", "sortUpdated"])
-		.index("by_repositoryId_and_state_and_sortUpdated", [
-			"repositoryId",
-			"state",
-			"sortUpdated",
-		])
-		.index("by_repositoryId_and_number", ["repositoryId", "number"]),
-
-	view_repo_issue_list: defineTable(ViewRepoIssueListSchema)
-		.index("by_repositoryId_and_sortUpdated", ["repositoryId", "sortUpdated"])
-		.index("by_repositoryId_and_state_and_sortUpdated", [
-			"repositoryId",
-			"state",
-			"sortUpdated",
-		])
-		.index("by_repositoryId_and_number", ["repositoryId", "number"]),
-
-	view_repo_workflow_run_list: defineTable(ViewRepoWorkflowRunListSchema)
-		.index("by_repositoryId_and_sortUpdated", ["repositoryId", "sortUpdated"])
-		.index("by_repositoryId_and_conclusion_and_sortUpdated", [
-			"repositoryId",
-			"conclusion",
-			"sortUpdated",
-		])
-		.index("by_repositoryId_and_githubRunId", ["repositoryId", "githubRunId"]),
-
+	// D) Activity Feed (append-only event log — not a materialized projection)
 	view_activity_feed: defineTable(ViewActivityFeedSchema)
 		.index("by_repositoryId_and_createdAt", ["repositoryId", "createdAt"])
 		.index("by_installationId_and_createdAt", ["installationId", "createdAt"]),

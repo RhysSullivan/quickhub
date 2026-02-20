@@ -1,4 +1,5 @@
 import { Context, Data, Effect, Layer } from "effect";
+import { getInstallationToken } from "./githubApp";
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -145,8 +146,26 @@ export class GitHubApiClient extends Context.Tag("@quickhub/GitHubApiClient")<
 >() {
 	/**
 	 * Construct a client layer from an explicit OAuth token string.
-	 * This is the only way to create a GitHubApiClient — all callers
-	 * must provide a user's GitHub OAuth token.
 	 */
 	static fromToken = (token: string) => Layer.succeed(this, makeClient(token));
+
+	/**
+	 * Construct a client layer from a GitHub App installation ID.
+	 *
+	 * Fetches a short-lived installation access token via the App's JWT,
+	 * then builds a client using that token. The token is cached in-memory
+	 * by `getInstallationToken` (see `githubApp.ts`).
+	 *
+	 * Use this when no user OAuth token is available — e.g. repos added
+	 * via the GitHub App installation flow (webhooks) where there is no
+	 * `connectedByUserId`.
+	 */
+	static fromInstallation = (installationId: number) =>
+		Layer.effect(
+			this,
+			Effect.gen(function* () {
+				const token = yield* getInstallationToken(installationId);
+				return makeClient(token);
+			}),
+		);
 }

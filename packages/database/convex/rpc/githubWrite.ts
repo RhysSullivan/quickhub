@@ -23,6 +23,7 @@ import {
 } from "../confect";
 import { GitHubApiClient } from "../shared/githubApi";
 import { lookupGitHubTokenByUserIdConfect } from "../shared/githubToken";
+import { resolveRepoAccess } from "../shared/permissions";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -86,12 +87,94 @@ class NotAuthenticated extends Schema.TaggedError<NotAuthenticated>()(
 	},
 ) {}
 
+const RequiredPermission = Schema.Literal(
+	"pull",
+	"triage",
+	"push",
+	"maintain",
+	"admin",
+);
+
+class InsufficientPermission extends Schema.TaggedError<InsufficientPermission>()(
+	"InsufficientPermission",
+	{
+		repositoryId: Schema.Number,
+		required: RequiredPermission,
+	},
+) {}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
 const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
+
+const permissionRank = {
+	pull: 0,
+	triage: 1,
+	push: 2,
+	maintain: 3,
+	admin: 4,
+};
+
+const highestPermission = (permission: {
+	readonly pull: boolean;
+	readonly triage: boolean;
+	readonly push: boolean;
+	readonly maintain: boolean;
+	readonly admin: boolean;
+}) => {
+	if (permission.admin) return "admin";
+	if (permission.maintain) return "maintain";
+	if (permission.push) return "push";
+	if (permission.triage) return "triage";
+	if (permission.pull) return "pull";
+	return null;
+};
+
+const requireRepoPermissionForMutation = (
+	ctx: ConfectMutationCtx,
+	userId: string,
+	repositoryId: number,
+	required: Schema.Schema.Type<typeof RequiredPermission>,
+) =>
+	Effect.gen(function* () {
+		const permission = yield* ctx.db
+			.query("github_user_repo_permissions")
+			.withIndex("by_userId_and_repositoryId", (q) =>
+				q.eq("userId", userId).eq("repositoryId", repositoryId),
+			)
+			.first();
+
+		if (Option.isSome(permission)) {
+			const actual = highestPermission(permission.value);
+			if (
+				actual !== null &&
+				permissionRank[actual] >= permissionRank[required]
+			) {
+				return;
+			}
+		}
+
+		const repo = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_githubRepoId", (q) => q.eq("githubRepoId", repositoryId))
+			.first();
+
+		if (
+			Option.isSome(repo) &&
+			!repo.value.private &&
+			permissionRank.pull >= permissionRank[required]
+		) {
+			return;
+		}
+
+		return yield* new InsufficientPermission({
+			repositoryId,
+			required,
+		});
+	});
 
 /**
  * Resolve the signed-in user's better-auth ID from the mutation context.
@@ -129,13 +212,23 @@ const createIssueDef = factory.mutation({
 		labels: Schema.optional(Schema.Array(Schema.String)),
 	},
 	success: Schema.Struct({ correlationId: Schema.String }),
-	error: Schema.Union(DuplicateOperationError, NotAuthenticated),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+	),
 });
 
 createIssueDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
 		const actingUserId = yield* getActingUserId(ctx);
+		yield* requireRepoPermissionForMutation(
+			ctx,
+			actingUserId,
+			args.repositoryId,
+			"triage",
+		);
 		const now = Date.now();
 
 		// Dedup check
@@ -208,13 +301,23 @@ const createCommentDef = factory.mutation({
 		body: Schema.String,
 	},
 	success: Schema.Struct({ correlationId: Schema.String }),
-	error: Schema.Union(DuplicateOperationError, NotAuthenticated),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+	),
 });
 
 createCommentDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
 		const actingUserId = yield* getActingUserId(ctx);
+		yield* requireRepoPermissionForMutation(
+			ctx,
+			actingUserId,
+			args.repositoryId,
+			"triage",
+		);
 		const now = Date.now();
 
 		const existing = yield* ctx.db
@@ -284,13 +387,23 @@ const updateIssueStateDef = factory.mutation({
 		state: Schema.Literal("open", "closed"),
 	},
 	success: Schema.Struct({ correlationId: Schema.String }),
-	error: Schema.Union(DuplicateOperationError, NotAuthenticated),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+	),
 });
 
 updateIssueStateDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
 		const actingUserId = yield* getActingUserId(ctx);
+		yield* requireRepoPermissionForMutation(
+			ctx,
+			actingUserId,
+			args.repositoryId,
+			"triage",
+		);
 		const now = Date.now();
 
 		const existing = yield* ctx.db
@@ -362,13 +475,23 @@ const mergePullRequestDef = factory.mutation({
 		commitMessage: Schema.optional(Schema.String),
 	},
 	success: Schema.Struct({ correlationId: Schema.String }),
-	error: Schema.Union(DuplicateOperationError, NotAuthenticated),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+	),
 });
 
 mergePullRequestDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
 		const actingUserId = yield* getActingUserId(ctx);
+		yield* requireRepoPermissionForMutation(
+			ctx,
+			actingUserId,
+			args.repositoryId,
+			"push",
+		);
 		const now = Date.now();
 
 		const existing = yield* ctx.db
@@ -1033,6 +1156,20 @@ const listWriteOperationsDef = factory.query({
 listWriteOperationsDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
+		const repo = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_githubRepoId", (q) =>
+				q.eq("githubRepoId", args.repositoryId),
+			)
+			.first();
+
+		if (Option.isNone(repo)) return [];
+
+		const access = yield* resolveRepoAccess(
+			repo.value.githubRepoId,
+			repo.value.private,
+		).pipe(Effect.either);
+		if (access._tag === "Left") return [];
 
 		if (args.stateFilter !== undefined) {
 			const ops = yield* ctx.db
@@ -1137,5 +1274,6 @@ export {
 	GitHubWriteError,
 	DuplicateOperationError,
 	NotAuthenticated,
+	InsufficientPermission,
 };
 export type GithubWriteModule = typeof githubWriteModule;

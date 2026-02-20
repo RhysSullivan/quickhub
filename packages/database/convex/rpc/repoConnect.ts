@@ -2,7 +2,6 @@ import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
 import { Effect, Option, Schema } from "effect";
 import { internal } from "../_generated/api";
 import { ConfectMutationCtx, confectSchema } from "../confect";
-import { updateRepoOverview } from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -172,13 +171,14 @@ connectRepoDef.implement((args) =>
 
 			syncJobId = String(jobId);
 
-			// Start durable bootstrap workflow (requires a connected user token)
-			if (args.connectedByUserId !== null) {
+			// Start durable bootstrap workflow (requires at least one token source)
+			if (args.connectedByUserId !== null || installationId > 0) {
 				yield* ctx.runMutation(internal.rpc.bootstrapWorkflow.startBootstrap, {
 					repositoryId: args.githubRepoId,
 					fullName: args.fullName,
 					lockKey,
 					connectedByUserId: args.connectedByUserId,
+					installationId,
 				});
 				bootstrapScheduled = true;
 			}
@@ -186,9 +186,17 @@ connectRepoDef.implement((args) =>
 			syncJobId = String(existingJob.value._id);
 		}
 
-		// Create the initial overview projection so the repo appears in
-		// the dashboard immediately (with zeroed-out counts).
-		yield* updateRepoOverview(args.githubRepoId).pipe(Effect.ignoreLogged);
+		if (args.connectedByUserId !== null) {
+			yield* Effect.promise(() =>
+				ctx.scheduler.runAfter(
+					0,
+					internal.rpc.githubActions.syncUserPermissions,
+					{
+						userId: args.connectedByUserId,
+					},
+				),
+			).pipe(Effect.ignoreLogged);
+		}
 
 		return {
 			repositoryId: args.githubRepoId,

@@ -13,7 +13,7 @@
  */
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
 import { Effect, Option, Schema } from "effect";
-import { internal } from "../_generated/api";
+import { components, internal } from "../_generated/api";
 import {
 	ConfectActionCtx,
 	ConfectMutationCtx,
@@ -29,7 +29,6 @@ import {
 	lookupGitHubTokenByUserIdConfect,
 	NoGitHubTokenError,
 } from "../shared/githubToken";
-import { updateRepoOverview } from "../shared/projections";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -127,6 +126,14 @@ const insertRepoAndBootstrapDef = factory.internalMutation({
 		webhookSetup: Schema.Boolean,
 		/** The better-auth user ID of whoever connected this repo. */
 		connectedByUserId: Schema.NullOr(Schema.String),
+		/** GitHub user ID of the connecting user (if known). */
+		connectedByGithubUserId: Schema.NullOr(Schema.Number),
+		permissionPull: Schema.Boolean,
+		permissionTriage: Schema.Boolean,
+		permissionPush: Schema.Boolean,
+		permissionMaintain: Schema.Boolean,
+		permissionAdmin: Schema.Boolean,
+		permissionRoleName: Schema.NullOr(Schema.String),
 	},
 	success: Schema.Struct({
 		repositoryId: Schema.Number,
@@ -184,6 +191,39 @@ insertRepoAndBootstrapDef.implement((args) =>
 			connectedByUserId: args.connectedByUserId,
 		});
 
+		if (
+			args.connectedByUserId !== null &&
+			args.connectedByGithubUserId !== null
+		) {
+			const existingPermission = yield* ctx.db
+				.query("github_user_repo_permissions")
+				.withIndex("by_userId_and_repositoryId", (q) =>
+					q
+						.eq("userId", args.connectedByUserId)
+						.eq("repositoryId", args.githubRepoId),
+				)
+				.first();
+
+			const permissionData = {
+				userId: args.connectedByUserId,
+				repositoryId: args.githubRepoId,
+				githubUserId: args.connectedByGithubUserId,
+				pull: args.permissionPull,
+				triage: args.permissionTriage,
+				push: args.permissionPush,
+				maintain: args.permissionMaintain,
+				admin: args.permissionAdmin,
+				roleName: args.permissionRoleName,
+				syncedAt: now,
+			};
+
+			if (Option.isSome(existingPermission)) {
+				yield* ctx.db.patch(existingPermission.value._id, permissionData);
+			} else {
+				yield* ctx.db.insert("github_user_repo_permissions", permissionData);
+			}
+		}
+
 		// Create sync job
 		const lockKey = `repo-bootstrap:${installationId}:${args.githubRepoId}`;
 
@@ -214,22 +254,18 @@ insertRepoAndBootstrapDef.implement((args) =>
 				updatedAt: now,
 			});
 
-			// Start durable bootstrap workflow (only if we have a connected user)
-			if (args.connectedByUserId !== null) {
+			// Start durable bootstrap workflow (requires at least one token source)
+			if (args.connectedByUserId !== null || installationId > 0) {
 				yield* ctx.runMutation(internal.rpc.bootstrapWorkflow.startBootstrap, {
 					repositoryId: args.githubRepoId,
 					fullName: args.fullName,
 					lockKey,
 					connectedByUserId: args.connectedByUserId,
+					installationId,
 				});
 			}
 			bootstrapScheduled = true;
 		}
-
-		// Create the initial view_repo_overview row so the repo appears
-		// in the dashboard immediately (with zeroed-out counts). The
-		// bootstrap will refresh it again once data is synced.
-		yield* updateRepoOverview(args.githubRepoId).pipe(Effect.ignoreLogged);
 
 		return {
 			repositoryId: args.githubRepoId,
@@ -294,6 +330,29 @@ addRepoByUrlDef.implement((args) =>
 			return yield* new NotAuthenticated({ reason: "User is not signed in" });
 		}
 		const userId = identity.value.subject;
+		const githubAccount = yield* ctx.runQuery(
+			components.betterAuth.adapter.findOne,
+			{
+				model: "account",
+				where: [
+					{ field: "providerId", value: "github" },
+					{ field: "userId", value: userId },
+				],
+			},
+		);
+
+		let connectedByGithubUserId: number | null = null;
+		if (
+			githubAccount !== null &&
+			typeof githubAccount === "object" &&
+			"accountId" in githubAccount &&
+			typeof githubAccount.accountId === "string"
+		) {
+			const parsed = Number(githubAccount.accountId);
+			if (!Number.isNaN(parsed)) {
+				connectedByGithubUserId = parsed;
+			}
+		}
 		const token = yield* lookupGitHubTokenByUserIdConfect(
 			ctx.runQuery,
 			userId,
@@ -372,6 +431,12 @@ addRepoByUrlDef.implement((args) =>
 			| Record<string, boolean>
 			| undefined;
 		const hasAdmin = permissions?.admin === true;
+		const permissionPull = permissions?.pull === true;
+		const permissionTriage = permissions?.triage === true;
+		const permissionPush = permissions?.push === true;
+		const permissionMaintain = permissions?.maintain === true;
+		const permissionAdmin = permissions?.admin === true;
+		const permissionRoleName = str(repoData.role_name);
 
 		let webhookCreated = false;
 
@@ -400,6 +465,8 @@ addRepoByUrlDef.implement((args) =>
 									"check_run",
 									"create",
 									"delete",
+									"workflow_run",
+									"workflow_job",
 								],
 								config: {
 									url: webhookUrl,
@@ -469,6 +536,13 @@ addRepoByUrlDef.implement((args) =>
 				isPrivate,
 				webhookSetup: webhookCreated,
 				connectedByUserId: userId,
+				connectedByGithubUserId,
+				permissionPull,
+				permissionTriage,
+				permissionPush,
+				permissionMaintain,
+				permissionAdmin,
+				permissionRoleName,
 			},
 		);
 
@@ -479,6 +553,16 @@ addRepoByUrlDef.implement((args) =>
 			bootstrapScheduled: Schema.Boolean,
 		});
 		const decoded = Schema.decodeUnknownSync(InsertResultSchema)(insertResult);
+
+		yield* Effect.promise(() =>
+			ctx.scheduler.runAfter(
+				0,
+				internal.rpc.githubActions.syncUserPermissions,
+				{
+					userId,
+				},
+			),
+		).pipe(Effect.ignoreLogged);
 
 		return {
 			fullName,

@@ -1,10 +1,16 @@
-import { createClient, type GenericCtx } from "@convex-dev/better-auth";
+import {
+	type AuthFunctions,
+	createClient,
+	type GenericCtx,
+} from "@convex-dev/better-auth";
 import { convex } from "@convex-dev/better-auth/plugins";
 import { type BetterAuthOptions, betterAuth } from "better-auth/minimal";
 import { type GenericDataModel, queryGeneric } from "convex/server";
-import { components } from "./_generated/api";
+import { components, internal } from "./_generated/api";
 import authConfig from "./auth.config";
 import authSchema from "./betterAuth/schema";
+
+const authFunctions: AuthFunctions = internal.auth;
 
 // ---------------------------------------------------------------------------
 // Better Auth component client (local install mode)
@@ -19,12 +25,35 @@ import authSchema from "./betterAuth/schema";
 export const authComponent = createClient<GenericDataModel, typeof authSchema>(
 	components.betterAuth,
 	{
+		authFunctions,
 		local: {
 			schema: authSchema,
 		},
 		verbose: false,
+		triggers: {
+			account: {
+				onCreate: async (ctx, account) => {
+					if (account.providerId !== "github") return;
+					await ctx.scheduler.runAfter(
+						0,
+						internal.rpc.githubActions.syncUserPermissions,
+						{ userId: account.userId },
+					);
+				},
+				onUpdate: async (ctx, newAccount) => {
+					if (newAccount.providerId !== "github") return;
+					await ctx.scheduler.runAfter(
+						0,
+						internal.rpc.githubActions.syncUserPermissions,
+						{ userId: newAccount.userId },
+					);
+				},
+			},
+		},
 	},
 );
+
+export const { onCreate, onUpdate, onDelete } = authComponent.triggersApi();
 
 // ---------------------------------------------------------------------------
 // Auth options factory
