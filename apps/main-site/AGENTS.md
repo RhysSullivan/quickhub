@@ -38,6 +38,25 @@ Run from `apps/main-site` unless noted.
 - Prefer inline event handlers when clearer than generic handler names.
 - Use `useEffectEvent` when effect callbacks need latest props/state without retriggering.
 
+## Data fetching and Suspense boundaries
+
+- **Never use `use()` to unwrap server Promises** — always `await` data on the server so it is properly prefetched and SSR'd.
+- **Suspense boundaries must be as close as possible to where data is used, not where it is fetched.** Static layout (backgrounds, grids, headings) must render immediately outside any Suspense boundary.
+- **Each data-dependent section gets its own async server component + `<Suspense>`**, even when multiple sections consume the same query. The confect server query cache deduplicates concurrent `queryPromise` calls with the same payload and auth scope into a single HTTP request.
+- **Do not prop-drill fetched data through component trees.** Instead of one parent fetching data and passing slices to children, each child section should have its own async server wrapper that fetches (deduped) and passes only the data that specific client component needs.
+- **Client components receive resolved `initialData`, not Promises.** They call `useSubscriptionWithInitial(atom, initialData)` for real-time updates after hydration.
+- Pattern:
+  ```
+  page.tsx (server, renders immediately)
+  ├── Static shell (layout, headings, grid) — no Suspense
+  ├── <Suspense fallback={<SectionSkeleton />}>
+  │   └── SectionContent (async server — awaits data)
+  │       └── SectionClient (client — receives initialData, subscribes)
+  ├── <Suspense fallback={<OtherSkeleton />}>
+  │   └── OtherContent (async server — awaits same deduped query)
+  │       └── OtherClient (client — receives initialData, subscribes)
+  ```
+
 ## Tests
 
 - Vitest environment: `happy-dom`.
