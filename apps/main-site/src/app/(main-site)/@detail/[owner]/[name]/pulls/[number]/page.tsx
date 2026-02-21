@@ -1,4 +1,6 @@
+import { api } from "@packages/database/convex/_generated/api";
 import { Suspense } from "react";
+import { fetchAuthMutation } from "@/lib/auth-server";
 import { serverQueries } from "@/lib/server-queries";
 import { PrDetailSkeleton } from "../../../../../_components/skeletons";
 import { PrDetailClient } from "./pr-detail-client";
@@ -34,6 +36,14 @@ async function PrDetailContent({
 			number: num,
 		}),
 	]);
+
+	if (initialPr !== null && initialFiles.files.length === 0) {
+		await fetchAuthMutation(api.rpc.projectionQueries.requestPrFileSync, {
+			ownerLogin: owner,
+			name,
+			number: num,
+		}).catch(() => null);
+	}
 
 	return (
 		<PrDetailClient

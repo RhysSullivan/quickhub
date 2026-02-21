@@ -17,7 +17,7 @@ import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useOnDemandSync } from "@packages/ui/rpc/on-demand-sync";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { PatchDiff } from "@pierre/diffs/react";
-import { use, useEffect, useId, useMemo, useState } from "react";
+import { use, useId, useMemo, useState } from "react";
 import { MarkdownBody } from "@/components/markdown-body";
 
 // ---------------------------------------------------------------------------
@@ -368,23 +368,7 @@ export function FilesChangedClient({
 	);
 	const filesData = useSubscriptionWithInitial(filesAtom, initialData);
 
-	// On-demand file sync: if no files are cached, request a background sync once
-	const [, requestFileSync] = useAtom(client.requestPrFileSync.mutate);
-	const [fileSyncRequested, setFileSyncRequested] = useState(false);
-	useEffect(() => {
-		if (filesData.files.length === 0 && !fileSyncRequested) {
-			setFileSyncRequested(true);
-			requestFileSync({ ownerLogin: owner, name, number: prNumber });
-		}
-	}, [
-		filesData.files.length,
-		owner,
-		name,
-		prNumber,
-		requestFileSync,
-		fileSyncRequested,
-	]);
-	const isSyncingFiles = fileSyncRequested && filesData.files.length === 0;
+	const isSyncingFiles = filesData.files.length === 0;
 
 	const files = filesData.files;
 

@@ -9,10 +9,8 @@ import {
 } from "@packages/ui/components/avatar";
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
-import { Card, CardContent, CardHeader } from "@packages/ui/components/card";
 import { Input } from "@packages/ui/components/input";
 import { Link } from "@packages/ui/components/link";
-import { Separator } from "@packages/ui/components/separator";
 import { Skeleton } from "@packages/ui/components/skeleton";
 import { Textarea } from "@packages/ui/components/textarea";
 import { cn } from "@packages/ui/lib/utils";
@@ -104,6 +102,7 @@ type PrDetail = {
 		readonly name: string;
 		readonly status: string;
 		readonly conclusion: string | null;
+		readonly runNumber: number | null;
 	}[];
 	readonly reviews: readonly {
 		readonly githubReviewId: number;
@@ -273,24 +272,7 @@ export function PrDetailClient({
 		);
 	}, [reviewDraftStorageKey, reviewDraftReplies]);
 
-	// On-demand file sync: if no files are cached, request a background sync once
-	const [, requestFileSync] = useAtom(client.requestPrFileSync.mutate);
-	const [fileSyncRequested, setFileSyncRequested] = useState(false);
-	useEffect(() => {
-		if (filesData.files.length === 0 && pr !== null && !fileSyncRequested) {
-			setFileSyncRequested(true);
-			requestFileSync({ ownerLogin: owner, name, number: prNumber });
-		}
-	}, [
-		filesData.files.length,
-		pr,
-		owner,
-		name,
-		prNumber,
-		requestFileSync,
-		fileSyncRequested,
-	]);
-	const isSyncingFiles = fileSyncRequested && filesData.files.length === 0;
+	const isSyncingFiles = filesData.files.length === 0;
 
 	const addDraftReply = useCallback(
 		(reply: Omit<DraftReviewReply, "id" | "createdAt">) => {
@@ -356,7 +338,7 @@ export function PrDetailClient({
 			</div>
 
 			{/* Right sidebar: description, metadata, reviews, comments */}
-			<div className="hidden lg:flex w-80 xl:w-96 shrink-0 border-l border-border/60 h-full flex-col overflow-y-auto bg-muted/20">
+			<div className="hidden lg:flex w-80 xl:w-96 shrink-0 border-l h-full flex-col overflow-y-auto">
 				<InfoSidebar
 					pr={pr}
 					owner={owner}
@@ -1207,42 +1189,42 @@ function ReviewDraftReplyCard({
 	const trimmedBody = draftBody.trim();
 
 	return (
-		<div className="rounded border bg-background px-2 py-1.5">
-			<div className="mb-1 flex items-center justify-between gap-1.5 text-[10px] text-muted-foreground">
-				<span className="truncate">{formatDraftReplyLocation(draftReply)}</span>
-				<div className="flex items-center gap-1">
-					<Button
-						variant="ghost"
-						size="sm"
-						className="h-5 px-1 text-[10px]"
+		<div className="rounded-md border px-3 py-2">
+			<div className="mb-1.5 flex items-center justify-between gap-2">
+				<span className="text-xs text-muted-foreground truncate">
+					{formatDraftReplyLocation(draftReply)}
+				</span>
+				<div className="flex items-center gap-1 shrink-0">
+					<button
+						type="button"
 						onClick={() => setIsEditing((current) => !current)}
+						className="rounded px-1.5 py-0.5 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer"
 					>
 						{isEditing ? "Cancel" : "Edit"}
-					</Button>
-					<Button
-						variant="ghost"
-						size="sm"
-						className="h-5 px-1 text-[10px]"
+					</button>
+					<button
+						type="button"
 						onClick={onRemove}
+						className="rounded px-1.5 py-0.5 text-xs text-muted-foreground/60 hover:text-destructive transition-colors cursor-pointer"
 					>
 						Remove
-					</Button>
+					</button>
 				</div>
 			</div>
 
 			{isEditing ? (
-				<div className="space-y-1.5">
+				<div className="space-y-2">
 					<Textarea
 						value={draftBody}
 						onChange={(event) => setDraftBody(event.target.value)}
 						rows={3}
-						className="text-[11px]"
+						className="text-xs resize-none"
 					/>
-					<div className="flex justify-end gap-1">
+					<div className="flex justify-end gap-1.5">
 						<Button
 							variant="outline"
 							size="sm"
-							className="h-6 px-1.5 text-[10px]"
+							className="h-7 text-xs"
 							onClick={() => {
 								setDraftBody(draftReply.replyBody);
 								setIsEditing(false);
@@ -1252,7 +1234,7 @@ function ReviewDraftReplyCard({
 						</Button>
 						<Button
 							size="sm"
-							className="h-6 px-1.5 text-[10px]"
+							className="h-7 text-xs"
 							disabled={trimmedBody.length === 0}
 							onClick={() => {
 								onSave(trimmedBody);
@@ -1264,12 +1246,12 @@ function ReviewDraftReplyCard({
 					</div>
 				</div>
 			) : (
-				<p className="line-clamp-3 text-[11px] leading-relaxed text-foreground">
+				<p className="line-clamp-3 text-xs leading-relaxed text-foreground">
 					{draftReply.replyBody}
 				</p>
 			)}
 
-			<p className="mt-1 text-[10px] text-muted-foreground">
+			<p className="mt-1.5 text-xs text-muted-foreground/50">
 				Queued {formatRelative(draftReply.createdAt)}
 			</p>
 		</div>
@@ -1279,6 +1261,39 @@ function ReviewDraftReplyCard({
 // ---------------------------------------------------------------------------
 // Right sidebar: description, actions, checks, reviews, comments
 // ---------------------------------------------------------------------------
+
+function SidebarSection({
+	children,
+	className,
+}: {
+	children: React.ReactNode;
+	className?: string;
+}) {
+	return <div className={cn("px-4 py-3", className)}>{children}</div>;
+}
+
+function SidebarHeading({
+	children,
+	count,
+}: {
+	children: React.ReactNode;
+	count?: number;
+}) {
+	return (
+		<h3 className="text-xs font-semibold text-muted-foreground mb-2 flex items-center gap-1.5">
+			{children}
+			{count !== undefined && (
+				<span className="text-muted-foreground/50 font-normal tabular-nums">
+					{count}
+				</span>
+			)}
+		</h3>
+	);
+}
+
+function SidebarDivider() {
+	return <div className="border-t" />;
+}
 
 function InfoSidebar({
 	pr,
@@ -1305,9 +1320,6 @@ function InfoSidebar({
 	const changesRequestedCount = pr.reviews.filter(
 		(review) => review.state === "CHANGES_REQUESTED",
 	).length;
-	const commentReviewCount = pr.reviews.filter(
-		(review) => review.state === "COMMENTED",
-	).length;
 
 	const failingChecksCount = pr.checkRuns.filter(
 		(check) => check.conclusion === "failure",
@@ -1315,6 +1327,10 @@ function InfoSidebar({
 	const pendingChecksCount = pr.checkRuns.filter(
 		(check) => check.status === "queued" || check.status === "in_progress",
 	).length;
+	const passingChecksCount = pr.checkRuns.filter(
+		(check) => check.conclusion === "success",
+	).length;
+
 	const [activityQuery, setActivityQuery] = useState("");
 	const [checkFilter, setCheckFilter] = useState<
 		"all" | "failing" | "pending" | "passing"
@@ -1379,410 +1395,404 @@ function InfoSidebar({
 	);
 
 	return (
-		<div className="p-3 space-y-4">
-			{/* Branch info */}
-			<div>
-				<h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 mb-1">
-					Branches
-				</h3>
-				<div className="text-xs text-muted-foreground">
-					<code className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-mono">
+		<div className="flex flex-col divide-y">
+			{/* ── Branch & status zone ── */}
+			<SidebarSection>
+				<div className="flex items-center gap-2 text-xs">
+					<code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground/80 truncate max-w-[40%]">
 						{pr.headRefName}
 					</code>
-					<span className="mx-1 text-muted-foreground/40">&rarr;</span>
-					<code className="rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-mono">
+					<span className="text-muted-foreground/40 shrink-0">&rarr;</span>
+					<code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground/80 truncate max-w-[40%]">
 						{pr.baseRefName}
 					</code>
 				</div>
-			</div>
 
-			{/* Metadata */}
-			<div className="flex flex-wrap items-center gap-1.5">
-				{pr.mergeableState && <MergeableStateBadge state={pr.mergeableState} />}
-				<Badge variant="outline" className="text-[10px] font-mono">
-					{pr.headSha.slice(0, 7)}
-				</Badge>
-			</div>
-
-			{/* Review/check summary */}
-			<div>
-				<h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
-					Summary
-				</h3>
-				<div className="grid grid-cols-2 gap-1.5 text-xs">
-					<div className="rounded border bg-background px-2 py-1.5">
-						<p className="text-[10px] text-muted-foreground">Approvals</p>
-						<p className="font-semibold tabular-nums">{approvedCount}</p>
-					</div>
-					<div className="rounded border bg-background px-2 py-1.5">
-						<p className="text-[10px] text-muted-foreground">
-							Changes requested
-						</p>
-						<p className="font-semibold tabular-nums">
-							{changesRequestedCount}
-						</p>
-					</div>
-					<div className="rounded border bg-background px-2 py-1.5">
-						<p className="text-[10px] text-muted-foreground">Review comments</p>
-						<p className="font-semibold tabular-nums">
-							{pr.reviewComments.length}
-						</p>
-					</div>
-					<div className="rounded border bg-background px-2 py-1.5">
-						<p className="text-[10px] text-muted-foreground">
-							General comments
-						</p>
-						<p className="font-semibold tabular-nums">{pr.comments.length}</p>
-					</div>
+				<div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+					{pr.mergeableState && (
+						<MergeableStateBadge state={pr.mergeableState} />
+					)}
+					<Badge variant="outline" className="text-xs font-mono">
+						{pr.headSha.slice(0, 7)}
+					</Badge>
 				</div>
-				<div className="mt-1.5 flex flex-wrap gap-1">
-					{failingChecksCount > 0 && (
-						<Badge variant="destructive" className="text-[10px]">
-							{failingChecksCount} failing check
-							{failingChecksCount === 1 ? "" : "s"}
-						</Badge>
-					)}
-					{pendingChecksCount > 0 && (
-						<Badge variant="outline" className="text-[10px]">
-							{pendingChecksCount} pending check
-							{pendingChecksCount === 1 ? "" : "s"}
-						</Badge>
-					)}
-					{commentReviewCount > 0 && (
-						<Badge variant="outline" className="text-[10px]">
-							{commentReviewCount} comment review
-							{commentReviewCount === 1 ? "" : "s"}
-						</Badge>
-					)}
-				</div>
-			</div>
 
-			{/* Action bar */}
-			<PrActionBar
-				ownerLogin={owner}
-				name={name}
-				number={prNumber}
-				repositoryId={pr.repositoryId}
-				state={pr.state}
-				draft={pr.draft}
-				mergedAt={pr.mergedAt}
-				mergeableState={pr.mergeableState}
-				headSha={pr.headSha}
-			/>
+				{/* Inline status counters */}
+				{(approvedCount > 0 ||
+					changesRequestedCount > 0 ||
+					failingChecksCount > 0 ||
+					pendingChecksCount > 0) && (
+					<div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs">
+						{approvedCount > 0 && (
+							<span className="inline-flex items-center gap-1 text-green-600">
+								<svg
+									className="size-3.5"
+									viewBox="0 0 16 16"
+									fill="currentColor"
+								>
+									<path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
+								</svg>
+								{approvedCount} approved
+							</span>
+						)}
+						{changesRequestedCount > 0 && (
+							<span className="inline-flex items-center gap-1 text-destructive">
+								<svg
+									className="size-3.5"
+									viewBox="0 0 16 16"
+									fill="currentColor"
+								>
+									<path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+								</svg>
+								{changesRequestedCount} changes
+							</span>
+						)}
+						{failingChecksCount > 0 && (
+							<span className="inline-flex items-center gap-1 text-destructive">
+								<div className="size-2 rounded-full bg-current" />
+								{failingChecksCount} failing
+							</span>
+						)}
+						{pendingChecksCount > 0 && (
+							<span className="inline-flex items-center gap-1 text-muted-foreground">
+								<div className="size-2 rounded-full border border-current" />
+								{pendingChecksCount} pending
+							</span>
+						)}
+						{passingChecksCount > 0 &&
+							failingChecksCount === 0 &&
+							pendingChecksCount === 0 && (
+								<span className="inline-flex items-center gap-1 text-green-600">
+									<svg
+										className="size-3.5"
+										viewBox="0 0 16 16"
+										fill="currentColor"
+									>
+										<path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
+									</svg>
+									All checks pass
+								</span>
+							)}
+					</div>
+				)}
+			</SidebarSection>
 
-			{/* Pending review draft replies */}
+			{/* ── Actions ── */}
+			<SidebarSection>
+				<PrActionBar
+					ownerLogin={owner}
+					name={name}
+					number={prNumber}
+					repositoryId={pr.repositoryId}
+					state={pr.state}
+					draft={pr.draft}
+					mergedAt={pr.mergedAt}
+					mergeableState={pr.mergeableState}
+					headSha={pr.headSha}
+				/>
+			</SidebarSection>
+
+			{/* ── Draft replies ── */}
 			{orderedDraftReplies.length > 0 && (
-				<div className="rounded-md border bg-muted/10 p-2">
-					<div className="mb-1.5 flex items-center justify-between gap-2">
-						<h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">
-							Review Draft ({orderedDraftReplies.length})
-						</h3>
-						<Button
-							variant="ghost"
-							size="sm"
-							className="h-6 px-1.5 text-[10px]"
-							onClick={onClearDraftReplies}
-						>
-							Clear
-						</Button>
-					</div>
-					<div className="space-y-1.5">
-						{orderedDraftReplies.map((draftReply) => (
-							<ReviewDraftReplyCard
-								key={draftReply.id}
-								draftReply={draftReply}
-								onRemove={() => onRemoveDraftReply(draftReply.id)}
-								onSave={(nextBody) =>
-									onUpdateDraftReplyBody(draftReply.id, nextBody)
-								}
-							/>
-						))}
-					</div>
-				</div>
+				<>
+					<SidebarSection>
+						<div className="flex items-center justify-between mb-2">
+							<SidebarHeading count={orderedDraftReplies.length}>
+								Draft replies
+							</SidebarHeading>
+							<Button
+								variant="ghost"
+								size="sm"
+								className="h-6 px-2 text-xs text-muted-foreground"
+								onClick={onClearDraftReplies}
+							>
+								Clear all
+							</Button>
+						</div>
+						<div className="space-y-2">
+							{orderedDraftReplies.map((draftReply) => (
+								<ReviewDraftReplyCard
+									key={draftReply.id}
+									draftReply={draftReply}
+									onRemove={() => onRemoveDraftReply(draftReply.id)}
+									onSave={(nextBody) =>
+										onUpdateDraftReplyBody(draftReply.id, nextBody)
+									}
+								/>
+							))}
+						</div>
+					</SidebarSection>
+				</>
 			)}
 
-			{/* Submit Review */}
+			{/* ── Submit Review ── */}
 			{pr.state === "open" && pr.mergedAt === null && (
-				<ReviewSubmitSection
+				<SidebarSection>
+					<ReviewSubmitSection
+						ownerLogin={owner}
+						name={name}
+						repositoryId={pr.repositoryId}
+						number={prNumber}
+						draftReplies={reviewDraftReplies}
+						onClearDraftReplies={onClearDraftReplies}
+					/>
+				</SidebarSection>
+			)}
+
+			{/* ── Description ── */}
+			{pr.body && (
+				<SidebarSection>
+					<CollapsibleDescription body={pr.body} />
+				</SidebarSection>
+			)}
+
+			{/* ── Metadata: Assignees + Labels ── */}
+			<SidebarSection className="space-y-4">
+				<AssigneesCombobox
 					ownerLogin={owner}
 					name={name}
 					repositoryId={pr.repositoryId}
 					number={prNumber}
-					draftReplies={reviewDraftReplies}
-					onClearDraftReplies={onClearDraftReplies}
+					currentAssignees={pr.assignees}
+					optimisticOperationType={pr.optimisticOperationType}
+					optimisticState={pr.optimisticState}
+					optimisticErrorMessage={pr.optimisticErrorMessage}
 				/>
-			)}
 
-			{/* Body / Description */}
-			{pr.body && <CollapsibleDescription body={pr.body} />}
+				<LabelsCombobox
+					ownerLogin={owner}
+					name={name}
+					repositoryId={pr.repositoryId}
+					number={prNumber}
+					currentLabels={pr.labelNames}
+					optimisticOperationType={pr.optimisticOperationType}
+					optimisticState={pr.optimisticState}
+					optimisticErrorMessage={pr.optimisticErrorMessage}
+				/>
+			</SidebarSection>
 
-			{/* Assignees */}
-			<AssigneesCombobox
-				ownerLogin={owner}
-				name={name}
-				repositoryId={pr.repositoryId}
-				number={prNumber}
-				currentAssignees={pr.assignees}
-				optimisticOperationType={pr.optimisticOperationType}
-				optimisticState={pr.optimisticState}
-				optimisticErrorMessage={pr.optimisticErrorMessage}
-			/>
-
-			{/* Labels */}
-			<LabelsCombobox
-				ownerLogin={owner}
-				name={name}
-				repositoryId={pr.repositoryId}
-				number={prNumber}
-				currentLabels={pr.labelNames}
-				optimisticOperationType={pr.optimisticOperationType}
-				optimisticState={pr.optimisticState}
-				optimisticErrorMessage={pr.optimisticErrorMessage}
-			/>
-
-			{/* Activity filters */}
-			<div className="space-y-1.5 rounded-md border bg-muted/10 p-2">
-				<p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80">
-					Activity filters
-				</p>
-				<div className="relative">
-					<Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						value={activityQuery}
-						onChange={(event) => setActivityQuery(event.target.value)}
-						placeholder="Filter checks/reviews/comments"
-						className="h-7 pl-7 text-[11px]"
-					/>
-				</div>
-				<div className="flex flex-wrap gap-1">
-					<Button
-						variant={checkFilter === "all" ? "default" : "outline"}
-						size="sm"
-						className="h-6 px-1.5 text-[10px]"
-						onClick={() => setCheckFilter("all")}
-					>
-						All checks
-					</Button>
-					<Button
-						variant={checkFilter === "failing" ? "default" : "outline"}
-						size="sm"
-						className="h-6 px-1.5 text-[10px]"
-						onClick={() => setCheckFilter("failing")}
-					>
-						Failing
-					</Button>
-					<Button
-						variant={checkFilter === "pending" ? "default" : "outline"}
-						size="sm"
-						className="h-6 px-1.5 text-[10px]"
-						onClick={() => setCheckFilter("pending")}
-					>
-						Pending
-					</Button>
-					<Button
-						variant={checkFilter === "passing" ? "default" : "outline"}
-						size="sm"
-						className="h-6 px-1.5 text-[10px]"
-						onClick={() => setCheckFilter("passing")}
-					>
-						Passing
-					</Button>
-				</div>
-				<div className="flex flex-wrap gap-1">
-					<Button
-						variant={reviewFilter === "all" ? "default" : "outline"}
-						size="sm"
-						className="h-6 px-1.5 text-[10px]"
-						onClick={() => setReviewFilter("all")}
-					>
-						All reviews
-					</Button>
-					<Button
-						variant={reviewFilter === "approved" ? "default" : "outline"}
-						size="sm"
-						className="h-6 px-1.5 text-[10px]"
-						onClick={() => setReviewFilter("approved")}
-					>
-						Approved
-					</Button>
-					<Button
-						variant={reviewFilter === "changes" ? "default" : "outline"}
-						size="sm"
-						className="h-6 px-1.5 text-[10px]"
-						onClick={() => setReviewFilter("changes")}
-					>
-						Changes
-					</Button>
-					<Button
-						variant={reviewFilter === "commented" ? "default" : "outline"}
-						size="sm"
-						className="h-6 px-1.5 text-[10px]"
-						onClick={() => setReviewFilter("commented")}
-					>
-						Commented
-					</Button>
-				</div>
-			</div>
-
-			{/* Check runs */}
-			{pr.checkRuns.length > 0 && (
-				<div>
-					<h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
-						Checks <span className="font-normal">({visibleChecks.length})</span>
-					</h3>
-					{visibleChecks.length > 0 ? (
-						<div className="divide-y rounded-md border">
-							{visibleChecks.map((check) => (
-								<Link
-									key={check.githubCheckRunId}
-									href={`https://github.com/${owner}/${name}/runs/${String(check.githubCheckRunId)}`}
-									target="_blank"
-									rel="noopener noreferrer"
-									className="flex items-center justify-between gap-2 px-2.5 py-1.5 hover:bg-muted/50 transition-colors group"
-								>
-									<div className="flex items-center gap-2 min-w-0">
-										<CheckIcon
-											status={check.status}
-											conclusion={check.conclusion}
-										/>
-										<span className="text-xs truncate group-hover:underline">
-											{check.name}
-										</span>
-									</div>
-									<div className="flex items-center gap-1.5 shrink-0">
-										{check.conclusion && (
-											<Badge
-												variant={
-													check.conclusion === "success"
-														? "secondary"
-														: check.conclusion === "failure"
-															? "destructive"
-															: "outline"
-												}
-												className={cn(
-													"text-[10px]",
-													check.conclusion === "success" && "text-green-600",
-												)}
-											>
-												{check.conclusion}
-											</Badge>
-										)}
-										<ExternalLink className="size-3 text-muted-foreground/40 group-hover:text-muted-foreground transition-colors" />
-									</div>
-								</Link>
-							))}
+			{/* ── Activity: Search + Checks + Reviews + Comments ── */}
+			{(pr.checkRuns.length > 0 ||
+				pr.reviews.length > 0 ||
+				pr.comments.length > 0) && (
+				<>
+					<SidebarSection className="pb-0">
+						<div className="relative">
+							<Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/60" />
+							<Input
+								value={activityQuery}
+								onChange={(event) => setActivityQuery(event.target.value)}
+								placeholder="Filter activity..."
+								className="h-8 pl-8 text-xs"
+							/>
 						</div>
-					) : (
-						<p className="rounded-md border bg-muted/10 px-2.5 py-2 text-xs text-muted-foreground">
-							No checks match the active filters.
-						</p>
-					)}
-				</div>
-			)}
+					</SidebarSection>
 
-			{/* Reviews */}
-			{pr.reviews.length > 0 && (
-				<div>
-					<h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
-						Reviews{" "}
-						<span className="font-normal">({visibleReviews.length})</span>
-					</h3>
-					{visibleReviews.length > 0 ? (
-						<div className="space-y-1">
-							{visibleReviews.map((review) => (
-								<div
-									key={review.githubReviewId}
-									className="flex items-center gap-2 rounded-md border px-2.5 py-1.5"
-								>
-									{review.authorLogin && (
-										<Avatar className="size-4">
-											<AvatarImage src={review.authorAvatarUrl ?? undefined} />
-											<AvatarFallback className="text-[8px]">
-												{review.authorLogin[0]?.toUpperCase()}
-											</AvatarFallback>
-										</Avatar>
-									)}
-									<span className="text-xs font-medium truncate">
-										{review.authorLogin ?? "Unknown"}
-									</span>
-									<ReviewStateBadge state={review.state} />
-									<ReviewOptimisticBadge
-										optimisticState={review.optimisticState}
-										optimisticErrorMessage={review.optimisticErrorMessage}
-									/>
-									{review.submittedAt && (
-										<span className="text-[10px] text-muted-foreground ml-auto tabular-nums">
-											{formatRelative(review.submittedAt)}
-										</span>
-									)}
+					{/* Checks */}
+					{pr.checkRuns.length > 0 && (
+						<SidebarSection>
+							<div className="flex items-center justify-between mb-2">
+								<SidebarHeading count={visibleChecks.length}>
+									Checks
+								</SidebarHeading>
+								<div className="flex items-center gap-0.5">
+									{(
+										[
+											["all", "All"],
+											["failing", "Fail"],
+											["pending", "Pend"],
+											["passing", "Pass"],
+										] as const
+									).map(([value, label]) => (
+										<button
+											key={value}
+											type="button"
+											onClick={() => setCheckFilter(value)}
+											className={cn(
+												"rounded px-1.5 py-0.5 text-xs transition-colors cursor-pointer",
+												checkFilter === value
+													? "bg-foreground/10 text-foreground font-medium"
+													: "text-muted-foreground/60 hover:text-muted-foreground",
+											)}
+										>
+											{label}
+										</button>
+									))}
 								</div>
-							))}
-						</div>
-					) : (
-						<p className="rounded-md border bg-muted/10 px-2.5 py-2 text-xs text-muted-foreground">
-							No reviews match the active filters.
-						</p>
-					)}
-				</div>
-			)}
+							</div>
+							{visibleChecks.length > 0 ? (
+								<div className="rounded-md border divide-y">
+									{visibleChecks.map((check) => {
+										const internalHref =
+											check.runNumber === null
+												? null
+												: `/${owner}/${name}/actions/${check.runNumber}`;
+										const href =
+											internalHref ??
+											`https://github.com/${owner}/${name}/runs/${String(check.githubCheckRunId)}`;
+										const isExternal = internalHref === null;
 
-			{/* Comments */}
-			{pr.comments.length > 0 && (
-				<div>
-					<h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
-						Comments{" "}
-						<span className="font-normal">({visibleComments.length})</span>
-					</h3>
-					{visibleComments.length > 0 ? (
-						<div className="space-y-2">
-							{visibleComments.map((comment) => (
-								<Card key={comment.githubCommentId}>
-									<CardHeader className="pb-0">
-										<div className="flex items-center gap-1.5 text-xs">
-											{comment.authorLogin && (
-												<span className="flex items-center gap-1">
-													<Avatar className="size-4">
+										return (
+											<Link
+												key={check.githubCheckRunId}
+												href={href}
+												target={isExternal ? "_blank" : undefined}
+												rel={isExternal ? "noopener noreferrer" : undefined}
+												className="flex items-center gap-2 px-2.5 py-2 hover:bg-muted/40 transition-colors group"
+											>
+												<CheckIcon
+													status={check.status}
+													conclusion={check.conclusion}
+												/>
+												<span className="text-xs truncate flex-1 group-hover:underline">
+													{check.name}
+												</span>
+												{isExternal && (
+													<ExternalLink className="size-3 text-muted-foreground/30 group-hover:text-muted-foreground/60 transition-colors shrink-0" />
+												)}
+											</Link>
+										);
+									})}
+								</div>
+							) : (
+								<p className="text-xs text-muted-foreground/60 py-1">
+									No checks match filters.
+								</p>
+							)}
+						</SidebarSection>
+					)}
+
+					{/* Reviews */}
+					{pr.reviews.length > 0 && (
+						<SidebarSection>
+							<div className="flex items-center justify-between mb-2">
+								<SidebarHeading count={visibleReviews.length}>
+									Reviews
+								</SidebarHeading>
+								<div className="flex items-center gap-0.5">
+									{(
+										[
+											["all", "All"],
+											["approved", "Appr"],
+											["changes", "Chng"],
+											["commented", "Cmnt"],
+										] as const
+									).map(([value, label]) => (
+										<button
+											key={value}
+											type="button"
+											onClick={() => setReviewFilter(value)}
+											className={cn(
+												"rounded px-1.5 py-0.5 text-xs transition-colors cursor-pointer",
+												reviewFilter === value
+													? "bg-foreground/10 text-foreground font-medium"
+													: "text-muted-foreground/60 hover:text-muted-foreground",
+											)}
+										>
+											{label}
+										</button>
+									))}
+								</div>
+							</div>
+							{visibleReviews.length > 0 ? (
+								<div className="space-y-1.5">
+									{visibleReviews.map((review) => (
+										<div
+											key={review.githubReviewId}
+											className="flex items-center gap-2 rounded-md border px-2.5 py-2"
+										>
+											{review.authorLogin && (
+												<Avatar className="size-5">
+													<AvatarImage
+														src={review.authorAvatarUrl ?? undefined}
+													/>
+													<AvatarFallback className="text-[9px]">
+														{review.authorLogin[0]?.toUpperCase()}
+													</AvatarFallback>
+												</Avatar>
+											)}
+											<span className="text-xs font-medium truncate flex-1">
+												{review.authorLogin ?? "Unknown"}
+											</span>
+											<ReviewStateBadge state={review.state} />
+											<ReviewOptimisticBadge
+												optimisticState={review.optimisticState}
+												optimisticErrorMessage={review.optimisticErrorMessage}
+											/>
+											{review.submittedAt && (
+												<span className="text-xs text-muted-foreground/50 tabular-nums shrink-0">
+													{formatRelative(review.submittedAt)}
+												</span>
+											)}
+										</div>
+									))}
+								</div>
+							) : (
+								<p className="text-xs text-muted-foreground/60 py-1">
+									No reviews match filters.
+								</p>
+							)}
+						</SidebarSection>
+					)}
+
+					{/* Comments */}
+					{pr.comments.length > 0 && (
+						<SidebarSection>
+							<SidebarHeading count={visibleComments.length}>
+								Comments
+							</SidebarHeading>
+							{visibleComments.length > 0 ? (
+								<div className="space-y-2.5">
+									{visibleComments.map((comment) => (
+										<div
+											key={comment.githubCommentId}
+											className="rounded-md border"
+										>
+											<div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/20">
+												{comment.authorLogin && (
+													<Avatar className="size-5">
 														<AvatarImage
 															src={comment.authorAvatarUrl ?? undefined}
 														/>
-														<AvatarFallback className="text-[8px]">
+														<AvatarFallback className="text-[9px]">
 															{comment.authorLogin[0]?.toUpperCase()}
 														</AvatarFallback>
 													</Avatar>
-													<span className="font-semibold">
-														{comment.authorLogin}
-													</span>
+												)}
+												<span className="text-xs font-medium">
+													{comment.authorLogin ?? "Unknown"}
 												</span>
-											)}
-											<span className="text-muted-foreground/60 tabular-nums">
-												{formatRelative(comment.createdAt)}
-											</span>
+												<span className="text-xs text-muted-foreground/50 tabular-nums ml-auto">
+													{formatRelative(comment.createdAt)}
+												</span>
+											</div>
+											<div className="px-3 py-2">
+												<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs leading-relaxed">
+													<MarkdownBody>{comment.body}</MarkdownBody>
+												</div>
+											</div>
 										</div>
-									</CardHeader>
-									<CardContent>
-										<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs leading-relaxed">
-											<MarkdownBody>{comment.body}</MarkdownBody>
-										</div>
-									</CardContent>
-								</Card>
-							))}
-						</div>
-					) : (
-						<p className="rounded-md border bg-muted/10 px-2.5 py-2 text-xs text-muted-foreground">
-							No comments match the active filters.
-						</p>
+									))}
+								</div>
+							) : (
+								<p className="text-xs text-muted-foreground/60 py-1">
+									No comments match filters.
+								</p>
+							)}
+						</SidebarSection>
 					)}
-				</div>
+				</>
 			)}
 
-			{/* Comment form */}
-			<Separator />
-			<CommentForm
-				ownerLogin={owner}
-				name={name}
-				number={prNumber}
-				repositoryId={pr.repositoryId}
-			/>
+			{/* ── Add comment ── */}
+			<SidebarSection>
+				<CommentForm
+					ownerLogin={owner}
+					name={name}
+					number={prNumber}
+					repositoryId={pr.repositoryId}
+				/>
+			</SidebarSection>
 		</div>
 	);
 }
@@ -1791,39 +1801,46 @@ function InfoSidebar({
 // Collapsible description — shows a preview with expand toggle
 // ---------------------------------------------------------------------------
 
+/**
+ * Strip HTML/markdown comments (`<!-- ... -->`) and trim.
+ * Returns the cleaned string so we can decide whether there's any visible
+ * content worth rendering.
+ */
+function stripHtmlComments(text: string): string {
+	return text.replace(/<!--[\s\S]*?-->/g, "").trim();
+}
+
 function CollapsibleDescription({ body }: { body: string }) {
 	const [expanded, setExpanded] = useState(false);
+	const visibleBody = stripHtmlComments(body);
+
+	if (visibleBody.length === 0) return null;
 
 	return (
 		<div>
-			<h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
-				Description
-			</h3>
-			<Card className="relative overflow-hidden">
-				<CardContent>
-					<div
-						className={cn(
-							"prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs leading-relaxed",
-							!expanded && "max-h-24 overflow-hidden",
-						)}
-					>
-						<MarkdownBody>{body}</MarkdownBody>
-					</div>
-				</CardContent>
-				{/* ───▼─── border toggle */}
+			<SidebarHeading>Description</SidebarHeading>
+			<div className="rounded-md border overflow-hidden">
+				<div
+					className={cn(
+						"prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs leading-relaxed px-3 py-1.5 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_h2]:text-sm [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-xs [&_h3]:mt-2.5 [&_h3]:mb-1 [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:py-0 [&_:not(pre)>code]:text-[0.85em]",
+						!expanded && "max-h-28 overflow-hidden",
+					)}
+				>
+					<MarkdownBody>{visibleBody}</MarkdownBody>
+				</div>
 				<button
 					type="button"
 					onClick={() => setExpanded((prev) => !prev)}
-					className="relative flex w-full items-center justify-center border-t border-border/60 py-1 hover:bg-muted/50 transition-colors cursor-pointer"
+					className="flex w-full items-center justify-center border-t py-1.5 hover:bg-muted/30 transition-colors cursor-pointer"
 				>
 					<ChevronDown
 						className={cn(
-							"size-3.5 text-muted-foreground transition-transform duration-200",
+							"size-3.5 text-muted-foreground/60 transition-transform duration-200",
 							expanded && "rotate-180",
 						)}
 					/>
 				</button>
-			</Card>
+			</div>
 		</div>
 	);
 }
@@ -1873,97 +1890,102 @@ function PrActionBar({
 		(mergeableState === "clean" || mergeableState === "unstable");
 	const canUpdateBranch = state === "open" && mergeableState === "behind";
 
+	const hasError =
+		Result.isFailure(mergeResult) ||
+		Result.isFailure(branchUpdateResult) ||
+		Result.isFailure(stateResult);
+
 	return (
-		<div className="flex flex-wrap items-center gap-2">
-			{canUpdateBranch && (
-				<Button
-					variant="outline"
-					size="sm"
-					disabled={isUpdatingBranch}
-					className="h-7 text-xs"
-					onClick={() => {
-						doUpdateBranch({
-							correlationId: `${correlationPrefix}-update-branch-${Date.now()}`,
-							ownerLogin,
-							name,
-							repositoryId,
-							number,
-							expectedHeadSha: headSha,
-						});
-					}}
-				>
-					{isUpdatingBranch ? "Updating..." : "Update branch"}
-				</Button>
-			)}
-			{state === "open" && (
-				<Button
-					size="sm"
-					disabled={!isMergeable || isMerging}
-					onClick={() => {
-						doMerge({
-							correlationId: `${correlationPrefix}-merge-${Date.now()}`,
-							ownerLogin,
-							name,
-							repositoryId,
-							number,
-						});
-					}}
-					className={cn(
-						"h-7 text-xs",
-						isMergeable && "bg-green-600 hover:bg-green-700 text-white",
-					)}
-				>
-					{isMerging ? "Merging..." : "Merge"}
-				</Button>
-			)}
-			{state === "open" && (
-				<Button
-					variant="outline"
-					size="sm"
-					disabled={isUpdatingState}
-					className="h-7 text-xs"
-					onClick={() => {
-						doUpdateState({
-							correlationId: `${correlationPrefix}-close-${Date.now()}`,
-							ownerLogin,
-							name,
-							repositoryId,
-							number,
-							state: "closed",
-						});
-					}}
-				>
-					{isUpdatingState ? "Closing..." : "Close"}
-				</Button>
-			)}
-			{state === "closed" && (
-				<Button
-					variant="outline"
-					size="sm"
-					disabled={isUpdatingState}
-					className="h-7 text-xs"
-					onClick={() => {
-						doUpdateState({
-							correlationId: `${correlationPrefix}-reopen-${Date.now()}`,
-							ownerLogin,
-							name,
-							repositoryId,
-							number,
-							state: "open",
-						});
-					}}
-				>
-					{isUpdatingState ? "Reopening..." : "Reopen"}
-				</Button>
-			)}
-			{Result.isFailure(mergeResult) && (
-				<span className="text-xs text-destructive">Merge failed.</span>
-			)}
-			{Result.isFailure(branchUpdateResult) && (
-				<span className="text-xs text-destructive">Branch update failed.</span>
-			)}
-			{Result.isFailure(stateResult) && (
-				<span className="text-xs text-destructive">Update failed.</span>
+		<div className="space-y-2">
+			<div className="flex items-center gap-2">
+				{state === "open" && (
+					<Button
+						size="sm"
+						disabled={!isMergeable || isMerging}
+						onClick={() => {
+							doMerge({
+								correlationId: `${correlationPrefix}-merge-${Date.now()}`,
+								ownerLogin,
+								name,
+								repositoryId,
+								number,
+							});
+						}}
+						className={cn(
+							"h-8 text-xs flex-1",
+							isMergeable && "bg-green-600 hover:bg-green-700 text-white",
+						)}
+					>
+						{isMerging ? "Merging..." : "Merge pull request"}
+					</Button>
+				)}
+				{canUpdateBranch && (
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={isUpdatingBranch}
+						className="h-8 text-xs"
+						onClick={() => {
+							doUpdateBranch({
+								correlationId: `${correlationPrefix}-update-branch-${Date.now()}`,
+								ownerLogin,
+								name,
+								repositoryId,
+								number,
+								expectedHeadSha: headSha,
+							});
+						}}
+					>
+						{isUpdatingBranch ? "Updating..." : "Update branch"}
+					</Button>
+				)}
+				{state === "open" && (
+					<Button
+						variant="ghost"
+						size="sm"
+						disabled={isUpdatingState}
+						className="h-8 text-xs text-muted-foreground"
+						onClick={() => {
+							doUpdateState({
+								correlationId: `${correlationPrefix}-close-${Date.now()}`,
+								ownerLogin,
+								name,
+								repositoryId,
+								number,
+								state: "closed",
+							});
+						}}
+					>
+						{isUpdatingState ? "Closing..." : "Close"}
+					</Button>
+				)}
+				{state === "closed" && (
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={isUpdatingState}
+						className="h-8 text-xs flex-1"
+						onClick={() => {
+							doUpdateState({
+								correlationId: `${correlationPrefix}-reopen-${Date.now()}`,
+								ownerLogin,
+								name,
+								repositoryId,
+								number,
+								state: "open",
+							});
+						}}
+					>
+						{isUpdatingState ? "Reopening..." : "Reopen"}
+					</Button>
+				)}
+			</div>
+			{hasError && (
+				<p className="text-xs text-destructive">
+					{Result.isFailure(mergeResult) && "Merge failed. "}
+					{Result.isFailure(branchUpdateResult) && "Branch update failed. "}
+					{Result.isFailure(stateResult) && "State update failed."}
+				</p>
 			)}
 		</div>
 	);
@@ -1994,30 +2016,28 @@ function CommentForm({
 
 	return (
 		<div>
-			<h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
-				Add a comment
-			</h3>
+			<SidebarHeading>Add comment</SidebarHeading>
 			<Textarea
 				placeholder="Leave a comment..."
 				value={body}
 				onChange={(e) => setBody(e.target.value)}
 				rows={3}
 				disabled={isSubmitting}
-				className="mb-2 text-xs"
+				className="text-xs resize-none"
 			/>
-			<div className="flex items-center justify-between">
+			<div className="flex items-center justify-between mt-2">
 				<div>
 					{Result.isFailure(commentResult) && (
 						<p className="text-xs text-destructive">Failed to submit.</p>
 					)}
 					{Result.isSuccess(commentResult) && body === "" && (
-						<p className="text-xs text-green-600">Submitted!</p>
+						<p className="text-xs text-green-600">Comment sent.</p>
 					)}
 				</div>
 				<Button
 					size="sm"
 					disabled={body.trim().length === 0 || isSubmitting}
-					className="h-7 text-xs"
+					className="h-8 text-xs"
 					onClick={() => {
 						submitComment({
 							correlationId: `${correlationPrefix}-comment-${Date.now()}`,
@@ -2030,7 +2050,7 @@ function CommentForm({
 						setBody("");
 					}}
 				>
-					{isSubmitting ? "Submitting..." : "Comment"}
+					{isSubmitting ? "Sending..." : "Comment"}
 				</Button>
 			</div>
 		</div>
@@ -2109,47 +2129,39 @@ function ReviewSubmitSection({
 
 	return (
 		<div>
-			<h3 className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70 mb-1.5">
-				Submit Review
-			</h3>
+			<SidebarHeading>Submit review</SidebarHeading>
 			{draftReplies.length > 0 && (
-				<div className="mb-2 rounded border bg-muted/10 px-2 py-1.5">
-					<div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-						<span>
-							{draftReplies.length} draft repl
-							{draftReplies.length === 1 ? "y" : "ies"}{" "}
-							{includeDraftReplies ? "will be included" : "currently excluded"}
+				<div className="mb-2.5 rounded-md border px-3 py-2">
+					<div className="flex items-center justify-between gap-2">
+						<span className="text-xs text-muted-foreground">
+							{draftReplies.length} draft{" "}
+							{draftReplies.length === 1 ? "reply" : "replies"}
 						</span>
 						<div className="flex items-center gap-1">
-							<Button
-								variant={includeDraftReplies ? "default" : "outline"}
-								size="sm"
-								className="h-5 px-1 text-[10px]"
+							<button
+								type="button"
 								onClick={() => setIncludeDraftReplies((current) => !current)}
+								className={cn(
+									"rounded px-1.5 py-0.5 text-xs transition-colors cursor-pointer",
+									includeDraftReplies
+										? "bg-foreground/10 text-foreground font-medium"
+										: "text-muted-foreground/60 hover:text-muted-foreground",
+								)}
 							>
 								{includeDraftReplies ? "Included" : "Excluded"}
-							</Button>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-5 px-1 text-[10px]"
+							</button>
+							<button
+								type="button"
 								onClick={() => setShowDraftPreview((current) => !current)}
+								className="rounded px-1.5 py-0.5 text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors cursor-pointer"
 							>
 								{showDraftPreview ? "Hide" : "Preview"}
-							</Button>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-5 px-1 text-[10px]"
-								onClick={onClearDraftReplies}
-							>
-								Clear
-							</Button>
+							</button>
 						</div>
 					</div>
 					{showDraftPreview && (
-						<div className="mt-1 rounded border bg-background p-2">
-							<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-[11px] leading-relaxed">
+						<div className="mt-2 rounded border bg-background p-2.5">
+							<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs leading-relaxed">
 								<MarkdownBody>
 									{renderDraftRepliesMarkdown(
 										includeDraftReplies ? draftReplies : [],
@@ -2166,49 +2178,45 @@ function ReviewSubmitSection({
 				onChange={(e) => setBody(e.target.value)}
 				rows={2}
 				disabled={isSubmitting}
-				className="text-xs"
+				className="text-xs resize-none"
 			/>
-			<div className="flex gap-1.5 mt-2">
+			<div className="flex gap-2 mt-2">
 				<Button
 					size="sm"
-					className="h-7 text-xs bg-green-600 hover:bg-green-700 text-white flex-1"
+					className="h-8 text-xs bg-green-600 hover:bg-green-700 text-white flex-1"
 					disabled={isSubmitting}
 					onClick={() => handleSubmit("APPROVE")}
 				>
-					{isSubmitting && pendingEvent === "APPROVE"
-						? "Submitting..."
-						: "Approve"}
+					{isSubmitting && pendingEvent === "APPROVE" ? "..." : "Approve"}
 				</Button>
 				<Button
 					size="sm"
 					variant="destructive"
-					className="h-7 text-xs flex-1"
+					className="h-8 text-xs flex-1"
 					disabled={isSubmitting}
 					onClick={() => handleSubmit("REQUEST_CHANGES")}
 				>
 					{isSubmitting && pendingEvent === "REQUEST_CHANGES"
-						? "Submitting..."
-						: "Changes"}
+						? "..."
+						: "Request changes"}
 				</Button>
 				<Button
 					size="sm"
 					variant="outline"
-					className="h-7 text-xs flex-1"
+					className="h-8 text-xs flex-1"
 					disabled={isSubmitting}
 					onClick={() => handleSubmit("COMMENT")}
 				>
-					{isSubmitting && pendingEvent === "COMMENT"
-						? "Submitting..."
-						: "Comment"}
+					{isSubmitting && pendingEvent === "COMMENT" ? "..." : "Comment"}
 				</Button>
 			</div>
 			{Result.isFailure(reviewResult) && (
-				<p className="mt-1 text-xs text-destructive">
+				<p className="mt-2 text-xs text-destructive">
 					{extractInteractionError(reviewResult, "Could not queue review")}
 				</p>
 			)}
 			{isSuccess && (
-				<p className="mt-1 text-xs text-green-600">
+				<p className="mt-2 text-xs text-green-600">
 					Review queued. Syncing with GitHub...
 				</p>
 			)}
@@ -2263,24 +2271,22 @@ function PrStateBadge({
 }) {
 	if (mergedAt !== null)
 		return (
-			<Badge className="bg-purple-600 hover:bg-purple-700 text-[10px]">
+			<Badge className="bg-purple-600 hover:bg-purple-700 text-xs">
 				Merged
 			</Badge>
 		);
 	if (draft)
 		return (
-			<Badge variant="outline" className="text-[10px]">
+			<Badge variant="outline" className="text-xs">
 				Draft
 			</Badge>
 		);
 	if (state === "open")
 		return (
-			<Badge className="bg-green-600 hover:bg-green-700 text-[10px]">
-				Open
-			</Badge>
+			<Badge className="bg-green-600 hover:bg-green-700 text-xs">Open</Badge>
 		);
 	return (
-		<Badge variant="secondary" className="text-[10px]">
+		<Badge variant="secondary" className="text-xs">
 			Closed
 		</Badge>
 	);
@@ -2307,10 +2313,15 @@ function MergeableStateBadge({ state }: { state: string }) {
 			variant: "outline",
 			className: "text-yellow-600",
 		},
+		behind: {
+			label: "Behind base",
+			variant: "outline",
+			className: "text-yellow-600",
+		},
 	};
 	const c = config[state] ?? { label: state, variant: "outline" as const };
 	return (
-		<Badge variant={c.variant} className={cn("text-[10px]", c.className)}>
+		<Badge variant={c.variant} className={cn("text-xs", c.className)}>
 			{c.label}
 		</Badge>
 	);
@@ -2341,7 +2352,7 @@ function ReviewStateBadge({ state }: { state: string }) {
 	};
 	const c = config[state] ?? { label: state, variant: "outline" as const };
 	return (
-		<Badge variant={c.variant} className={cn("text-[10px]", c.className)}>
+		<Badge variant={c.variant} className={cn("text-xs", c.className)}>
 			{c.label}
 		</Badge>
 	);
@@ -2356,22 +2367,22 @@ function ReviewOptimisticBadge({
 }) {
 	if (optimisticState === "failed") {
 		return (
-			<Badge variant="destructive" className="text-[10px]">
-				{optimisticErrorMessage ?? "GitHub rejected this review."}
+			<Badge variant="destructive" className="text-xs">
+				{optimisticErrorMessage ?? "Rejected"}
 			</Badge>
 		);
 	}
 	if (optimisticState === "pending") {
 		return (
-			<Badge variant="outline" className="text-[10px]">
-				Syncing with GitHub
+			<Badge variant="outline" className="text-xs">
+				Syncing
 			</Badge>
 		);
 	}
 	if (optimisticState === "confirmed") {
 		return (
-			<Badge variant="secondary" className="text-[10px] text-green-600">
-				Confirmed by GitHub
+			<Badge variant="secondary" className="text-xs text-green-600">
+				Confirmed
 			</Badge>
 		);
 	}
