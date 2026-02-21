@@ -129,10 +129,9 @@ const discordIconStyles = cva("", {
 	variants: {
 		color: {
 			blurple:
-				"dark:text-blue-400 text-[#5865F2] hover:text-[#7289DA] dark:hover:text-blue-300 transition-all",
+				"text-blurple hover:text-blurple/80 dark:text-blurple dark:hover:text-blurple/80 transition-all",
 			inherit: "text-inherit",
-			primary:
-				"dark:text-neutral-200 dark:hover:text-neutral-400 text-neutral-800 hover:text-neutral-700 transition-all",
+			primary: "text-foreground hover:text-muted-foreground transition-all",
 		},
 	},
 	defaultVariants: {

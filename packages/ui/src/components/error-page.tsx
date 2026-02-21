@@ -1,8 +1,9 @@
 "use client";
 
-import { Button } from "@packages/ui/components/button";
-import { AlertTriangle, Home, RefreshCw } from "@packages/ui/components/icons";
-import { cn } from "@packages/ui/lib/utils";
+import { cn } from "../lib/utils";
+import { Button } from "./button";
+import { AlertTriangle, Home, RefreshCw } from "./icons";
+import { Link } from "./link";
 
 interface ErrorPageProps {
 	error: Error & { digest?: string };
@@ -47,10 +48,10 @@ function ErrorPage({
 					Try again
 				</Button>
 				<Button asChild>
-					<a href={homeHref}>
+					<Link href={homeHref}>
 						<Home className="size-4" />
 						Go home
-					</a>
+					</Link>
 				</Button>
 			</div>
 		</div>
@@ -67,28 +68,26 @@ function GlobalErrorPage({ error, reset }: GlobalErrorPageProps) {
 		<html lang="en">
 			<body>
 				<div className="flex min-h-screen flex-col items-center justify-center gap-6 p-8 text-center">
-					<div className="flex size-16 items-center justify-center rounded-full bg-red-100">
-						<AlertTriangle className="size-8 text-red-600" />
+					<div className="flex size-16 items-center justify-center rounded-full bg-destructive/10">
+						<AlertTriangle className="size-8 text-destructive" />
 					</div>
 					<div className="space-y-2">
 						<h1 className="text-2xl font-semibold tracking-tight">
 							Something went wrong
 						</h1>
-						<p className="max-w-md text-gray-500">
+						<p className="max-w-md text-muted-foreground">
 							A critical error occurred. Please try again.
 						</p>
 						{error.digest && (
-							<p className="text-xs text-gray-400">Error ID: {error.digest}</p>
+							<p className="text-xs text-muted-foreground">
+								Error ID: {error.digest}
+							</p>
 						)}
 					</div>
-					<button
-						type="button"
-						onClick={reset}
-						className="inline-flex items-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800"
-					>
+					<Button onClick={reset}>
 						<RefreshCw className="size-4" />
 						Try again
-					</button>
+					</Button>
 				</div>
 			</body>
 		</html>

@@ -57,7 +57,7 @@
 	--accent: oklch(0.94 0.008 255);
 	--accent-foreground: oklch(0.205 0.015 260);
 	--destructive: oklch(0.577 0.245 27.325);
-	--destructive-foreground: oklch(0.577 0.245 27.325);
+	--destructive-foreground: oklch(0.985 0.001 260);
 	--border: oklch(0.895 0.008 255);
 	--input: oklch(0.895 0.008 255);
 	--ring: oklch(0.55 0.04 260);
@@ -66,6 +66,19 @@
 	--chart-3: oklch(0.398 0.07 227.392);
 	--chart-4: oklch(0.828 0.189 84.429);
 	--chart-5: oklch(0.769 0.188 70.08);
+	--github-open: oklch(0.59 0.19 149);
+	--github-closed: oklch(0.57 0.22 25);
+	--github-merged: oklch(0.56 0.2 307);
+	--github-draft: oklch(0.56 0.02 258);
+	--github-warning: oklch(0.66 0.15 78);
+	--github-info: oklch(0.58 0.18 255);
+	--status-open: var(--github-open);
+	--status-closed: var(--github-closed);
+	--status-merged: var(--github-merged);
+	--status-label: var(--github-warning);
+	--status-user: var(--github-info);
+	--status-repo: var(--github-info);
+	--status-updated: var(--github-info);
 	--radius: 0.5rem;
 	--sidebar: oklch(0.98 0.002 255);
 	--sidebar-foreground: oklch(0.145 0.015 260);
@@ -75,6 +88,8 @@
 	--sidebar-accent-foreground: oklch(0.205 0.015 260);
 	--sidebar-border: oklch(0.91 0.006 255);
 	--sidebar-ring: oklch(0.55 0.04 260);
+	--overlay: oklch(0 0 0 / 0.72);
+	--overlay-foreground: oklch(0.985 0.001 260);
 
 	/* Shiki theme variables */
 	--shiki-light: #24292e;
@@ -100,7 +115,7 @@
 	--accent: oklch(0.21 0.018 265);
 	--accent-foreground: oklch(0.92 0.006 260);
 	--destructive: oklch(0.396 0.141 25.723);
-	--destructive-foreground: oklch(0.637 0.237 25.331);
+	--destructive-foreground: oklch(0.985 0.001 260);
 	--border: oklch(0.225 0.016 265);
 	--input: oklch(0.225 0.016 265);
 	--ring: oklch(0.45 0.03 265);
@@ -109,6 +124,19 @@
 	--chart-3: oklch(0.8 0.22 70.08);
 	--chart-4: oklch(0.72 0.28 303.9);
 	--chart-5: oklch(0.76 0.26 16.439);
+	--github-open: oklch(0.72 0.18 145);
+	--github-closed: oklch(0.67 0.23 25);
+	--github-merged: oklch(0.68 0.2 307);
+	--github-draft: oklch(0.71 0.02 258);
+	--github-warning: oklch(0.77 0.15 83);
+	--github-info: oklch(0.74 0.14 250);
+	--status-open: var(--github-open);
+	--status-closed: var(--github-closed);
+	--status-merged: var(--github-merged);
+	--status-label: var(--github-warning);
+	--status-user: var(--github-info);
+	--status-repo: var(--github-info);
+	--status-updated: var(--github-info);
 	--sidebar: oklch(0.095 0.01 265);
 	--sidebar-foreground: oklch(0.92 0.006 260);
 	--sidebar-primary: oklch(0.55 0.2 264.376);
@@ -117,6 +145,8 @@
 	--sidebar-accent-foreground: oklch(0.92 0.006 260);
 	--sidebar-border: oklch(0.2 0.014 265);
 	--sidebar-ring: oklch(0.35 0.02 265);
+	--overlay: oklch(0 0 0 / 0.8);
+	--overlay-foreground: oklch(0.985 0.001 260);
 }
 
 @theme inline {
@@ -148,6 +178,19 @@
 	--color-chart-3: var(--chart-3);
 	--color-chart-4: var(--chart-4);
 	--color-chart-5: var(--chart-5);
+	--color-github-open: var(--github-open);
+	--color-github-closed: var(--github-closed);
+	--color-github-merged: var(--github-merged);
+	--color-github-draft: var(--github-draft);
+	--color-github-warning: var(--github-warning);
+	--color-github-info: var(--github-info);
+	--color-status-open: var(--status-open);
+	--color-status-closed: var(--status-closed);
+	--color-status-merged: var(--status-merged);
+	--color-status-label: var(--status-label);
+	--color-status-user: var(--status-user);
+	--color-status-repo: var(--status-repo);
+	--color-status-updated: var(--status-updated);
 	--radius-sm: calc(var(--radius) - 2px);
 	--radius-md: var(--radius);
 	--radius-lg: calc(var(--radius) + 2px);
@@ -160,6 +203,8 @@
 	--color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
 	--color-sidebar-border: var(--sidebar-border);
 	--color-sidebar-ring: var(--sidebar-ring);
+	--color-overlay: var(--overlay);
+	--color-overlay-foreground: var(--overlay-foreground);
 }
 
 @layer base {

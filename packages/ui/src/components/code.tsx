@@ -148,7 +148,7 @@ function InlineCodeFallback({
 	return (
 		<span
 			className={cn(
-				"inline-code not-prose inline-block align-middle rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 text-sm *:whitespace-normal max-w-full overflow-x-auto",
+				"inline-code not-prose inline-block align-middle rounded border border-border bg-muted text-sm *:whitespace-normal max-w-full overflow-x-auto",
 				className,
 			)}
 		>
@@ -173,7 +173,7 @@ function InlineCodeInternal({
 	return (
 		<span
 			className={cn(
-				"inline-code not-prose inline-block align-middle rounded border border-neutral-300 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-800 text-sm *:whitespace-normal max-w-full overflow-x-auto",
+				"inline-code not-prose inline-block align-middle rounded border border-border bg-muted text-sm *:whitespace-normal max-w-full overflow-x-auto",
 				className,
 			)}
 			data-theme={theme}
@@ -306,7 +306,7 @@ export function Code({
 	}
 
 	return (
-		<div className="not-prose w-full overflow-auto rounded border dark:border-neutral-700 border-neutral-300 [&::-webkit-scrollbar-thumb]:bg-gray-300 dark:[&::-webkit-scrollbar-thumb]:bg-neutral-500 [&::-webkit-scrollbar-track]:bg-gray-100 dark:[&::-webkit-scrollbar-track]:bg-neutral-700 [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2">
+		<div className="not-prose w-full overflow-auto rounded border border-border [&::-webkit-scrollbar-thumb]:bg-border [&::-webkit-scrollbar-track]:bg-muted [&::-webkit-scrollbar]:h-2 [&::-webkit-scrollbar]:w-2">
 			<CodeBlock
 				lang={language}
 				content={code}

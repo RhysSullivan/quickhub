@@ -98,7 +98,7 @@ export function ImageLightbox({
 		<DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
 			<DialogPrimitive.Portal>
 				<DialogPrimitive.Overlay
-					className="fixed inset-0 z-50 bg-black/90 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+					className="fixed inset-0 z-50 bg-overlay/90 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
 					onClick={() => onOpenChange(false)}
 				/>
 				<DialogPrimitive.Content
@@ -114,7 +114,7 @@ export function ImageLightbox({
 						<Button
 							variant="ghost"
 							size="icon"
-							className="size-10 rounded-full bg-black/50 text-white hover:bg-black/70"
+							className="size-10 rounded-full bg-overlay/50 text-overlay-foreground hover:bg-overlay/70"
 							onClick={handleDownload}
 						>
 							<Download className="size-5" />
@@ -124,7 +124,7 @@ export function ImageLightbox({
 							<Button
 								variant="ghost"
 								size="icon"
-								className="size-10 rounded-full bg-black/50 text-white hover:bg-black/70"
+								className="size-10 rounded-full bg-overlay/50 text-overlay-foreground hover:bg-overlay/70"
 							>
 								<X className="size-5" />
 								<span className="sr-only">Close</span>
@@ -137,7 +137,7 @@ export function ImageLightbox({
 							<Button
 								variant="ghost"
 								size="icon"
-								className="pointer-events-auto absolute left-4 z-10 size-12 rounded-full bg-black/50 text-white hover:bg-black/70"
+								className="pointer-events-auto absolute left-4 z-10 size-12 rounded-full bg-overlay/50 text-overlay-foreground hover:bg-overlay/70"
 								onClick={goToPrevious}
 							>
 								<ChevronLeft className="size-8" />
@@ -146,7 +146,7 @@ export function ImageLightbox({
 							<Button
 								variant="ghost"
 								size="icon"
-								className="pointer-events-auto absolute right-4 z-10 size-12 rounded-full bg-black/50 text-white hover:bg-black/70"
+								className="pointer-events-auto absolute right-4 z-10 size-12 rounded-full bg-overlay/50 text-overlay-foreground hover:bg-overlay/70"
 								onClick={goToNext}
 							>
 								<ChevronRight className="size-8" />
@@ -189,8 +189,8 @@ export function ImageLightbox({
 									className={cn(
 										"size-2 rounded-full transition-colors",
 										idx === currentIndex
-											? "bg-white"
-											: "bg-white/50 hover:bg-white/75",
+											? "bg-overlay-foreground"
+											: "bg-overlay-foreground/50 hover:bg-overlay-foreground/75",
 									)}
 									onClick={() => {
 										setCurrentIndex(idx);
