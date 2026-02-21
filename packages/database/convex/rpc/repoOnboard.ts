@@ -21,10 +21,7 @@ import {
 	confectSchema,
 } from "../confect";
 import { GitHubApiClient } from "../shared/githubApi";
-import {
-	lookupGitHubTokenByUserIdConfect,
-	NoGitHubTokenError,
-} from "../shared/githubToken";
+import { lookupGitHubTokenByUserIdConfect } from "../shared/githubToken";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -100,9 +97,9 @@ const parseRepoFullName = (input: string): string | null => {
 	return null;
 };
 
-const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
-const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
-const bool = (v: unknown): boolean => v === true;
+const _str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+const _num = (v: unknown): number | null => (typeof v === "number" ? v : null);
+const _bool = (v: unknown): boolean => v === true;
 
 // ---------------------------------------------------------------------------
 // Internal mutation: insert repo records + schedule bootstrap

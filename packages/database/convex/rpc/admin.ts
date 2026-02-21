@@ -3,11 +3,8 @@ import { Effect, Option, Schema } from "effect";
 import { ConfectMutationCtx, ConfectQueryCtx, confectSchema } from "../confect";
 import {
 	checkRunsByRepo,
-	commentsByIssueNumber,
 	issuesByRepo,
-	jobsByWorkflowRun,
 	prsByRepo,
-	reviewsByPrNumber,
 	webhooksByState,
 } from "../shared/aggregates";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
@@ -157,9 +154,9 @@ tableCountsDef.implement(() =>
 		let pullRequestsTotal = 0;
 		let issuesTotal = 0;
 		let checkRunsTotal = 0;
-		const issueCommentsTotal = 0;
-		const pullRequestReviewsTotal = 0;
-		const workflowJobsTotal = 0;
+		const _issueCommentsTotal = 0;
+		const _pullRequestReviewsTotal = 0;
+		const _workflowJobsTotal = 0;
 
 		for (const repoId of repoIds) {
 			const [prCount, issueCount, checkRunCount] = yield* Effect.promise(() =>

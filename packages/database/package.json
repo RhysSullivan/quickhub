@@ -16,6 +16,7 @@
 		"deploy": "bun run with-env:prod convex deploy",
 		"codegen": "bunx convex codegen",
 		"generate:auth-schema": "cd convex/betterAuth && bunx @better-auth/cli generate -y --output generatedSchema.ts",
+		"generate:github-client": "bun run scripts/extract-github-openapi-subset.ts && bunx openapi-gen -s convex/shared/github-openapi-subset.json -n GitHubClient > convex/shared/generated_github_client.ts",
 		"dev": "bun convex dev",
 		"typecheck": "tsgo -p convex/tsconfig.json --noEmit & tsgo -p tsconfig.json --noEmit & wait",
 		"typecheck:slow": "tsc -p convex/tsconfig.json --noEmit & tsc -p tsconfig.json --noEmit & wait",
@@ -37,6 +38,7 @@
 		"better-auth": "catalog:",
 		"convex": "catalog:",
 		"convex-helpers": "^0.1.104",
+		"@effect/platform": "catalog:",
 		"effect": "catalog:",
 		"zod": "catalog:"
 	},
@@ -44,6 +46,7 @@
 		"@edge-runtime/vm": "catalog:",
 		"@effect/vitest": "^0.27.0",
 		"@packages/convex-test": "workspace:*",
+		"@tim-smart/openapi-gen": "0.4.13",
 		"@types/node": "catalog:",
 		"vitest": "catalog:"
 	}
