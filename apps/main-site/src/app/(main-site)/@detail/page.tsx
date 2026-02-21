@@ -19,8 +19,13 @@ export default function DetailSlot() {
 
 async function HomeDashboardContent() {
 	await connection();
-	const initialDashboard = await serverQueries.getHomeDashboard.queryPromise(
+	const initialDashboardPromise = serverQueries.getHomeDashboard.queryPromise(
 		{},
 	);
-	return <HomeDashboard initialDashboard={initialDashboard} />;
+	return (
+		<HomeDashboard
+			initialDashboardPromise={initialDashboardPromise}
+			query={{}}
+		/>
+	);
 }

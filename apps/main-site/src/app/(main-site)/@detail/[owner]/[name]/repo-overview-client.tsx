@@ -265,24 +265,6 @@ export function RepoOverviewPanel({
 						</div>
 					</div>
 				)}
-
-				{/* Quick nav links */}
-				<div className="grid grid-cols-2 gap-2">
-					<Link
-						href={`/${owner}/${name}/pulls`}
-						className="flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors no-underline"
-					>
-						<GitPullRequest className="size-3.5" />
-						All PRs
-					</Link>
-					<Link
-						href={`/${owner}/${name}/issues`}
-						className="flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors no-underline"
-					>
-						<CircleDot className="size-3.5" />
-						All Issues
-					</Link>
-				</div>
 			</div>
 		</div>
 	);

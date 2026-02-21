@@ -668,7 +668,7 @@ function RepoResults({
 		<CommandGroup heading={heading}>
 			{filtered.map((repo) => {
 				const target: NavigationTarget = {
-					path: `/${repo.ownerLogin}/${repo.name}/pulls`,
+					path: `/${repo.ownerLogin}/${repo.name}`,
 					title: repo.fullName,
 					subtitle: null,
 					kind: "repo",

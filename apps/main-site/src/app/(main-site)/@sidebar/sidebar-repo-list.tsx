@@ -6,13 +6,12 @@ import {
 	AvatarFallback,
 	AvatarImage,
 } from "@packages/ui/components/avatar";
-import { Button } from "@packages/ui/components/button";
 import {
 	Collapsible,
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from "@packages/ui/components/collapsible";
-import { ChevronRight, Download } from "@packages/ui/components/icons";
+import { ChevronRight } from "@packages/ui/components/icons";
 import { Link } from "@packages/ui/components/link";
 import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
@@ -126,6 +125,17 @@ export function SidebarRepoList({
 															: "text-muted-foreground hover:text-foreground hover:bg-accent/40",
 													)}
 												>
+													<Avatar className="size-3.5 shrink-0">
+														{repo.ownerAvatarUrl && (
+															<AvatarImage
+																src={repo.ownerAvatarUrl}
+																alt={repo.name}
+															/>
+														)}
+														<AvatarFallback className="text-[7px]">
+															{repo.name.slice(0, 2).toUpperCase()}
+														</AvatarFallback>
+													</Avatar>
 													<span className="truncate text-[11px] leading-none">
 														{repo.name}
 													</span>

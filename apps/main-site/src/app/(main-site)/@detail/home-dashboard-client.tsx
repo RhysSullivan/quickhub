@@ -28,7 +28,7 @@ import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -144,6 +144,13 @@ export type DashboardData = {
 		githubUpdatedAt: number;
 	}>;
 	repos: ReadonlyArray<RepoSummary>;
+};
+
+type DashboardQuery = {
+	readonly scope?: "org" | "personal";
+	readonly ownerLogin?: string;
+	readonly repoFullName?: string;
+	readonly days?: number;
 };
 
 // ---------------------------------------------------------------------------
@@ -265,7 +272,7 @@ function DashboardCommandPalette({
 									key={repo.fullName}
 									value={repo.fullName}
 									onSelect={() =>
-										handleSelect(`/${repo.ownerLogin}/${repo.name}/pulls`)
+										handleSelect(`/${repo.ownerLogin}/${repo.name}`)
 									}
 								>
 									<GitBranch className="size-3.5 text-muted-foreground" />
@@ -336,16 +343,25 @@ function DashboardCommandPalette({
 // ---------------------------------------------------------------------------
 
 export function HomeDashboard({
-	initialDashboard,
+	initialDashboardPromise,
+	query,
 }: {
-	initialDashboard: DashboardData;
+	initialDashboardPromise: Promise<DashboardData>;
+	query: DashboardQuery;
 }) {
+	const initialDashboard = use(initialDashboardPromise);
 	const session = authClient.useSession();
 	const client = useProjectionQueries();
 
 	const dashboardAtom = useMemo(
-		() => client.getHomeDashboard.subscription({}),
-		[client],
+		() =>
+			client.getHomeDashboard.subscription({
+				scope: query.scope,
+				ownerLogin: query.ownerLogin,
+				repoFullName: query.repoFullName,
+				days: query.days,
+			}),
+		[client, query.days, query.ownerLogin, query.repoFullName, query.scope],
 	);
 	const dashboardResult = useAtomValue(dashboardAtom);
 	const data = useSubscriptionWithInitial(dashboardAtom, initialDashboard);
@@ -730,7 +746,7 @@ function IssueRow({ issue }: { issue: DashboardIssueItem }) {
 function RepoRow({ repo }: { repo: RepoSummary }) {
 	return (
 		<Link
-			href={`/${repo.ownerLogin}/${repo.name}/pulls`}
+			href={`/${repo.ownerLogin}/${repo.name}`}
 			className="flex items-center justify-between gap-2 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
 		>
 			<div className="min-w-0 flex-1">

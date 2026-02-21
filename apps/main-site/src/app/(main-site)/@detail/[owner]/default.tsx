@@ -24,8 +24,13 @@ async function OrgDashboardContent({
 }) {
 	await connection();
 	const { owner } = await paramsPromise;
-	const initialDashboard = await serverQueries.getHomeDashboard.queryPromise({
+	const initialDashboardPromise = serverQueries.getHomeDashboard.queryPromise({
 		ownerLogin: owner,
 	});
-	return <HomeDashboard initialDashboard={initialDashboard} />;
+	return (
+		<HomeDashboard
+			initialDashboardPromise={initialDashboardPromise}
+			query={{ ownerLogin: owner }}
+		/>
+	);
 }

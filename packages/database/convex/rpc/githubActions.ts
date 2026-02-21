@@ -66,6 +66,14 @@ const RepoPermissionItemSchema = Schema.Struct({
 	roleName: Schema.NullOr(Schema.String),
 });
 
+const GitHubOwnerUserSchema = Schema.Struct({
+	githubUserId: Schema.Number,
+	login: Schema.String,
+	avatarUrl: Schema.NullOr(Schema.String),
+	siteAdmin: Schema.Boolean,
+	type: Schema.Literal("User", "Bot", "Organization"),
+});
+
 const SyncPermissionsResultSchema = Schema.Struct({
 	userId: Schema.String,
 	syncedRepoCount: Schema.Number,
@@ -135,6 +143,9 @@ const toRepoPermissionItem = (value: unknown) => {
 		roleName: decoded.right.role_name ?? null,
 	};
 };
+
+const toGitHubUserType = (value: string): "User" | "Bot" | "Organization" =>
+	value === "Bot" ? "Bot" : value === "Organization" ? "Organization" : "User";
 
 // ---------------------------------------------------------------------------
 // Endpoint definitions
@@ -519,6 +530,7 @@ const upsertUserRepoPermissionsDef = factory.internalMutation({
 		syncedAt: Schema.Number,
 		connectedRepoIds: Schema.Array(Schema.Number),
 		repoPermissions: Schema.Array(RepoPermissionItemSchema),
+		ownerUsers: Schema.Array(GitHubOwnerUserSchema),
 	},
 	success: Schema.Struct({
 		upsertedRepoCount: Schema.Number,
@@ -610,6 +622,10 @@ const syncPermissionsForUser = (userId: string) =>
 		const repoPermissions: Array<
 			Schema.Schema.Type<typeof RepoPermissionItemSchema>
 		> = [];
+		const ownerUsersById = new Map<
+			number,
+			Schema.Schema.Type<typeof GitHubOwnerUserSchema>
+		>();
 
 		let page = 1;
 		let hasMore = true;
@@ -627,6 +643,13 @@ const syncPermissionsForUser = (userId: string) =>
 					connectedRepoIdSet.has(permission.repositoryId)
 				) {
 					repoPermissions.push(permission);
+					ownerUsersById.set(rawRepo.owner.id, {
+						githubUserId: rawRepo.owner.id,
+						login: rawRepo.owner.login,
+						avatarUrl: rawRepo.owner.avatar_url,
+						siteAdmin: rawRepo.owner.site_admin,
+						type: toGitHubUserType(rawRepo.owner.type),
+					});
 				}
 			}
 
@@ -642,6 +665,7 @@ const syncPermissionsForUser = (userId: string) =>
 				syncedAt: Date.now(),
 				connectedRepoIds,
 				repoPermissions,
+				ownerUsers: [...ownerUsersById.values()],
 			},
 		);
 
@@ -711,6 +735,34 @@ listStalePermissionUserIdsDef.implement((args) =>
 upsertUserRepoPermissionsDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectMutationCtx;
+
+		for (const ownerUser of args.ownerUsers) {
+			const existingOwner = yield* ctx.db
+				.query("github_users")
+				.withIndex("by_githubUserId", (q) =>
+					q.eq("githubUserId", ownerUser.githubUserId),
+				)
+				.first();
+
+			if (Option.isSome(existingOwner)) {
+				yield* ctx.db.patch(existingOwner.value._id, {
+					login: ownerUser.login,
+					avatarUrl: ownerUser.avatarUrl,
+					siteAdmin: ownerUser.siteAdmin,
+					type: ownerUser.type,
+					updatedAt: args.syncedAt,
+				});
+			} else {
+				yield* ctx.db.insert("github_users", {
+					githubUserId: ownerUser.githubUserId,
+					login: ownerUser.login,
+					avatarUrl: ownerUser.avatarUrl,
+					siteAdmin: ownerUser.siteAdmin,
+					type: ownerUser.type,
+					updatedAt: args.syncedAt,
+				});
+			}
+		}
 
 		const existingRows = yield* ctx.db
 			.query("github_user_repo_permissions")

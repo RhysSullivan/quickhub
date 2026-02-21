@@ -77,6 +77,15 @@ export function RepoNavSelector({
 		if (owner === null) return null;
 		return (grouped[owner] ?? [])[0]?.ownerAvatarUrl ?? null;
 	}, [grouped, owner]);
+	const currentRepoAvatar = useMemo(() => {
+		if (name === null) return null;
+		const selectedRepo = repos.find(
+			(repo) => repo.ownerLogin === owner && repo.name === name,
+		);
+		if (selectedRepo) return selectedRepo.ownerAvatarUrl;
+		const fallbackRepo = repos.find((repo) => repo.name === name);
+		return fallbackRepo?.ownerAvatarUrl ?? null;
+	}, [name, owner, repos]);
 
 	const [orgOpen, setOrgOpen] = useState(false);
 	const [repoOpen, setRepoOpen] = useState(false);
@@ -206,7 +215,19 @@ export function RepoNavSelector({
 						size="sm"
 						className="h-8 w-full justify-between px-2 gap-1.5 text-xs font-bold tracking-tight"
 					>
-						<span className="truncate">{repoLabel}</span>
+						<span className="flex items-center gap-2 min-w-0">
+							{name !== null && (
+								<Avatar className="size-5 shrink-0">
+									{currentRepoAvatar && (
+										<AvatarImage src={currentRepoAvatar} alt={name} />
+									)}
+									<AvatarFallback className="text-[8px]">
+										{name.slice(0, 2).toUpperCase()}
+									</AvatarFallback>
+								</Avatar>
+							)}
+							<span className="truncate">{repoLabel}</span>
+						</span>
 						{repoOpen ? (
 							<ChevronUpIcon className="size-3.5 shrink-0 text-muted-foreground/50" />
 						) : (
@@ -241,6 +262,17 @@ export function RepoNavSelector({
 										className="gap-2 text-xs py-1.5"
 										onSelect={() => handleRepoSelect(repo)}
 									>
+										<Avatar className="size-5 shrink-0">
+											{repo.ownerAvatarUrl && (
+												<AvatarImage
+													src={repo.ownerAvatarUrl}
+													alt={repo.name}
+												/>
+											)}
+											<AvatarFallback className="text-[8px]">
+												{repo.name.slice(0, 2).toUpperCase()}
+											</AvatarFallback>
+										</Avatar>
 										<span className="truncate">{repo.name}</span>
 										{(repo.openPrCount > 0 || repo.failingCheckCount > 0) && (
 											<span className="ml-auto shrink-0 text-[10px] text-muted-foreground/40 tabular-nums flex items-center gap-1">

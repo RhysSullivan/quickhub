@@ -1,5 +1,106 @@
 import { Data, Effect } from "effect";
 
+const RSA_ENCRYPTION_OID = Uint8Array.of(
+	0x2a,
+	0x86,
+	0x48,
+	0x86,
+	0xf7,
+	0x0d,
+	0x01,
+	0x01,
+	0x01,
+);
+
+const DER_NULL = Uint8Array.of(0x05, 0x00);
+
+const concatBytes = (chunks: ReadonlyArray<Uint8Array>) => {
+	let totalLength = 0;
+	for (const chunk of chunks) {
+		totalLength += chunk.length;
+	}
+
+	const result = new Uint8Array(totalLength);
+	let offset = 0;
+	for (const chunk of chunks) {
+		result.set(chunk, offset);
+		offset += chunk.length;
+	}
+
+	return result;
+};
+
+const encodeDerLength = (length: number) => {
+	if (length < 0x80) {
+		return Uint8Array.of(length);
+	}
+
+	const lengthBytes: Array<number> = [];
+	let remaining = length;
+	while (remaining > 0) {
+		lengthBytes.unshift(remaining & 0xff);
+		remaining = Math.floor(remaining / 256);
+	}
+
+	return Uint8Array.of(0x80 | lengthBytes.length, ...lengthBytes);
+};
+
+const encodeDer = (tag: number, value: Uint8Array) =>
+	concatBytes([Uint8Array.of(tag), encodeDerLength(value.length), value]);
+
+const encodeBase64Url = (data: Uint8Array | string) => {
+	const bytes =
+		typeof data === "string" ? new TextEncoder().encode(data) : data;
+
+	let binary = "";
+	for (const byte of bytes) {
+		binary += String.fromCharCode(byte);
+	}
+
+	const base64 = btoa(binary);
+	return base64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+};
+
+const parsePemToPkcs8 = (privateKeyPem: string): Uint8Array => {
+	const pkcs8Match = privateKeyPem.match(
+		/-----BEGIN PRIVATE KEY-----([\s\S]*?)-----END PRIVATE KEY-----/,
+	);
+	if (pkcs8Match && pkcs8Match[1]) {
+		const derBody = pkcs8Match[1].replace(/\s/g, "");
+		return Uint8Array.from(atob(derBody), (char) => char.charCodeAt(0));
+	}
+
+	const pkcs1Match = privateKeyPem.match(
+		/-----BEGIN RSA PRIVATE KEY-----([\s\S]*?)-----END RSA PRIVATE KEY-----/,
+	);
+	if (!pkcs1Match || !pkcs1Match[1]) {
+		throw new Error("Unsupported private key format");
+	}
+
+	const pkcs1Body = pkcs1Match[1].replace(/\s/g, "");
+	const pkcs1Der = Uint8Array.from(atob(pkcs1Body), (char) =>
+		char.charCodeAt(0),
+	);
+
+	const version = encodeDer(0x02, Uint8Array.of(0x00));
+	const algorithmIdentifier = encodeDer(
+		0x30,
+		concatBytes([encodeDer(0x06, RSA_ENCRYPTION_OID), DER_NULL]),
+	);
+	const privateKey = encodeDer(0x04, pkcs1Der);
+
+	return encodeDer(
+		0x30,
+		concatBytes([version, algorithmIdentifier, privateKey]),
+	);
+};
+
+const toArrayBuffer = (bytes: Uint8Array) => {
+	const copy = new Uint8Array(bytes.length);
+	copy.set(bytes);
+	return copy.buffer;
+};
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -46,29 +147,16 @@ const createAppJwt = (
 				iss: appClientId,
 			};
 
-			const encodeBase64Url = (data: string) => {
-				const base64 = btoa(data);
-				return base64
-					.replace(/\+/g, "-")
-					.replace(/\//g, "_")
-					.replace(/=+$/, "");
-			};
-
 			const headerB64 = encodeBase64Url(JSON.stringify(header));
 			const payloadB64 = encodeBase64Url(JSON.stringify(payload));
 			const signingInput = `${headerB64}.${payloadB64}`;
 
 			// Import the PEM private key for signing
-			const pemBody = privateKeyPem
-				.replace(/-----BEGIN RSA PRIVATE KEY-----/, "")
-				.replace(/-----END RSA PRIVATE KEY-----/, "")
-				.replace(/\s/g, "");
-
-			const binaryDer = Uint8Array.from(atob(pemBody), (c) => c.charCodeAt(0));
+			const binaryDer = parsePemToPkcs8(privateKeyPem);
 
 			const cryptoKey = await crypto.subtle.importKey(
 				"pkcs8",
-				binaryDer,
+				toArrayBuffer(binaryDer),
 				{ name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
 				false,
 				["sign"],
@@ -81,9 +169,7 @@ const createAppJwt = (
 				new TextEncoder().encode(signingInput),
 			);
 
-			const signatureB64 = encodeBase64Url(
-				String.fromCharCode(...new Uint8Array(signatureBuffer)),
-			);
+			const signatureB64 = encodeBase64Url(new Uint8Array(signatureBuffer));
 
 			return `${signingInput}.${signatureB64}`;
 		},

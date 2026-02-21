@@ -33,7 +33,7 @@ export async function RepoListShell({
 					<Link
 						href={`/${owner}/${name}/pulls`}
 						className={cn(
-							"flex items-center gap-0.5 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
+							"flex items-center gap-1 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 							activeTab === "pulls"
 								? "border-foreground text-foreground"
 								: "border-transparent text-muted-foreground hover:text-foreground",
@@ -41,12 +41,12 @@ export async function RepoListShell({
 						aria-label="Pull requests"
 					>
 						<GitPullRequest className="size-2.5" />
-						<span className="sr-only">PRs</span>
+						<span>PRs</span>
 					</Link>
 					<Link
 						href={`/${owner}/${name}/issues`}
 						className={cn(
-							"flex items-center gap-0.5 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
+							"flex items-center gap-1 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 							activeTab === "issues"
 								? "border-foreground text-foreground"
 								: "border-transparent text-muted-foreground hover:text-foreground",
@@ -54,12 +54,12 @@ export async function RepoListShell({
 						aria-label="Issues"
 					>
 						<TriangleAlert className="size-2.5" />
-						<span className="sr-only">Issues</span>
+						<span>Issues</span>
 					</Link>
 					<Link
 						href={`/${owner}/${name}/actions`}
 						className={cn(
-							"flex items-center gap-0.5 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
+							"flex items-center gap-1 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 							activeTab === "actions"
 								? "border-foreground text-foreground"
 								: "border-transparent text-muted-foreground hover:text-foreground",
@@ -67,12 +67,12 @@ export async function RepoListShell({
 						aria-label="CI"
 					>
 						<Play className="size-2.5" />
-						<span className="sr-only">CI</span>
+						<span>CI</span>
 					</Link>
 					<Link
 						href={`/${owner}/${name}/code`}
 						className={cn(
-							"flex items-center gap-0.5 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
+							"flex items-center gap-1 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
 							activeTab === "code"
 								? "border-foreground text-foreground"
 								: "border-transparent text-muted-foreground hover:text-foreground",
@@ -80,7 +80,7 @@ export async function RepoListShell({
 						aria-label="Code"
 					>
 						<FileCode2 className="size-2.5" />
-						<span className="sr-only">Code</span>
+						<span>Code</span>
 					</Link>
 				</div>
 			</div>
