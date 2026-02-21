@@ -22,72 +22,60 @@ import { Effect } from "effect";
 import { internal } from "../_generated/api";
 import type { ActionCtx } from "../_generated/server";
 import { internalAction } from "../_generated/server";
-import { GitHubApiClient, GitHubApiError } from "../shared/githubApi";
-import {
-	lookupGitHubTokenByUserId,
-	resolveRepoToken,
-} from "../shared/githubToken";
+import type { Issue, SimpleUser } from "../shared/generated_github_client";
+import { GitHubApiClient } from "../shared/githubApi";
+import { resolveRepoToken } from "../shared/githubToken";
 
 // ---------------------------------------------------------------------------
 // GitHub response parsing helpers
 // ---------------------------------------------------------------------------
 
-const parseNextLink = (linkHeader: string | null): string | null => {
-	if (!linkHeader) return null;
-	const matches = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-	return matches?.[1] ?? null;
-};
-
-const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
-
-const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
-
-const isoToMs = (v: unknown): number | null => {
-	if (typeof v !== "string") return null;
+const isoToMs = (v: string | null | undefined): number | null => {
+	if (v == null) return null;
 	const ms = new Date(v).getTime();
 	return Number.isNaN(ms) ? null : ms;
 };
-
-const userType = (v: unknown): "User" | "Bot" | "Organization" =>
-	v === "Bot" ? "Bot" : v === "Organization" ? "Organization" : "User";
 
 // ---------------------------------------------------------------------------
 // Shared user collector
 // ---------------------------------------------------------------------------
 
-type CollectedUser = {
-	githubUserId: number;
-	login: string;
-	avatarUrl: string | null;
-	siteAdmin: boolean;
-	type: "User" | "Bot" | "Organization";
-};
+type UserInput = Pick<
+	typeof SimpleUser.Type,
+	"id" | "login" | "avatar_url" | "site_admin" | "type"
+>;
 
 const createUserCollector = () => {
-	const userMap = new Map<number, CollectedUser>();
-
-	const collectUser = (u: unknown): number | null => {
-		if (
-			u !== null &&
-			u !== undefined &&
-			typeof u === "object" &&
-			"id" in u &&
-			"login" in u
-		) {
-			const id = num(u.id);
-			const login = str(u.login);
-			if (id !== null && login !== null && !userMap.has(id)) {
-				userMap.set(id, {
-					githubUserId: id,
-					login,
-					avatarUrl: "avatar_url" in u ? str(u.avatar_url) : null,
-					siteAdmin: "site_admin" in u ? u.site_admin === true : false,
-					type: "type" in u ? userType(u.type) : "User",
-				});
-			}
-			return id;
+	const userMap = new Map<
+		number,
+		{
+			githubUserId: number;
+			login: string;
+			avatarUrl: string | null;
+			siteAdmin: boolean;
+			type: "User" | "Bot" | "Organization";
 		}
-		return null;
+	>();
+
+	const collectUser = (u: UserInput | null | undefined): number | null => {
+		if (u == null) return null;
+		const id = u.id;
+		const login = u.login;
+		if (!userMap.has(id)) {
+			userMap.set(id, {
+				githubUserId: id,
+				login,
+				avatarUrl: u.avatar_url,
+				siteAdmin: u.site_admin,
+				type:
+					u.type === "Bot"
+						? "Bot"
+						: u.type === "Organization"
+							? "Organization"
+							: "User",
+			});
+		}
+		return id;
 	};
 
 	return { collectUser, getUsers: () => [...userMap.values()] };
@@ -150,7 +138,10 @@ const resolveGitHubClient = (ctx: ActionCtx, tokenArgs: TokenArgs) =>
 /**
  * Write collected users to the DB in batches of 50.
  */
-const writeUsers = async (ctx: ActionCtx, users: Array<CollectedUser>) => {
+const writeUsers = async (
+	ctx: ActionCtx,
+	users: ReturnType<ReturnType<typeof createUserCollector>["getUsers"]>,
+) => {
 	for (let i = 0; i < users.length; i += 50) {
 		await ctx.runMutation(internal.rpc.bootstrapWrite.upsertUsers, {
 			users: users.slice(i, i + 50),
@@ -188,6 +179,15 @@ const toTokenArgs = (args: {
 	installationId: args.installationId,
 });
 
+/**
+ * Split "owner/repo" into [owner, repo].
+ */
+const splitFullName = (fullName: string): [string, string] => {
+	const idx = fullName.indexOf("/");
+	if (idx === -1) return [fullName, ""];
+	return [fullName.slice(0, idx), fullName.slice(idx + 1)];
+};
+
 // ---------------------------------------------------------------------------
 // Step 1: Fetch branches
 // ---------------------------------------------------------------------------
@@ -200,35 +200,23 @@ export const fetchBranches = internalAction({
 	},
 	returns: v.object({ count: v.number() }),
 	handler: async (ctx, args): Promise<{ count: number }> => {
+		const [owner, repo] = splitFullName(args.fullName);
+
 		const rawBranches = await runWithGitHub(
 			ctx,
 			toTokenArgs(args),
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
-				return yield* gh.use(async (fetch) => {
-					const res = await fetch(
-						`/repos/${args.fullName}/branches?per_page=100`,
-					);
-					if (!res.ok)
-						throw new GitHubApiError({
-							status: res.status,
-							message: await res.text(),
-							url: res.url,
-						});
-					return (await res.json()) as Array<Record<string, unknown>>;
-				});
-			}).pipe(Effect.orDie),
+				return yield* gh.client
+					.reposListBranches(owner, repo, { per_page: 100 })
+					.pipe(Effect.orDie);
+			}),
 		);
 
 		const branches = rawBranches.map((b) => ({
-			name: str(b.name) ?? "unknown",
-			headSha:
-				str(
-					typeof b.commit === "object" && b.commit !== null && "sha" in b.commit
-						? b.commit.sha
-						: null,
-				) ?? "",
-			protected: b.protected === true,
+			name: b.name,
+			headSha: b.commit.sha,
+			protected: b.protected,
 		}));
 
 		await ctx.runMutation(internal.rpc.bootstrapWrite.upsertBranches, {
@@ -249,13 +237,13 @@ export const fetchPullRequestsChunk = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
-		/** The GitHub API URL for this chunk, or null to start from page 1. */
+		/** Stringified page number for this chunk, or null to start from page 1. */
 		cursor: v.union(v.string(), v.null()),
 		...tokenArgs,
 	},
 	returns: v.object({
 		count: v.number(),
-		/** The next GitHub API URL, or null if all pages exhausted. */
+		/** The next page number as string, or null if all pages exhausted. */
 		nextCursor: v.union(v.string(), v.null()),
 	}),
 	handler: async (
@@ -266,62 +254,44 @@ export const fetchPullRequestsChunk = internalAction({
 		nextCursor: string | null;
 	}> => {
 		const { collectUser, getUsers } = createUserCollector();
+		const [owner, repo] = splitFullName(args.fullName);
 		let totalCount = 0;
 
 		const gh = await resolveGitHubClient(ctx, toTokenArgs(args));
 
-		let url: string | null =
-			args.cursor ?? `/repos/${args.fullName}/pulls?state=all&per_page=100`;
-
+		let currentPage = args.cursor ? Number.parseInt(args.cursor, 10) : 1;
 		let pagesProcessed = 0;
 		let nextCursor: string | null = null;
 
-		while (url && pagesProcessed < PAGES_PER_CHUNK) {
-			// Fetch one page
-			const { page, nextUrl } = await Effect.runPromise(
-				gh
-					.use(async (fetch) => {
-						const res = await fetch(url!);
-						if (!res.ok)
-							throw new GitHubApiError({
-								status: res.status,
-								message: await res.text(),
-								url: res.url,
-							});
-						return {
-							page: (await res.json()) as Array<Record<string, unknown>>,
-							nextUrl: parseNextLink(res.headers.get("Link")),
-						};
+		while (pagesProcessed < PAGES_PER_CHUNK) {
+			const page = await Effect.runPromise(
+				gh.client
+					.pullsList(owner, repo, {
+						state: "all",
+						per_page: 100,
+						page: currentPage,
 					})
 					.pipe(Effect.orDie),
 			);
 
 			// Transform the page
 			const pullRequests = page.map((pr) => {
-				const authorUserId = collectUser(pr.user);
-				const head =
-					typeof pr.head === "object" && pr.head !== null
-						? (pr.head as Record<string, unknown>)
-						: {};
-				const base =
-					typeof pr.base === "object" && pr.base !== null
-						? (pr.base as Record<string, unknown>)
-						: {};
+				const authorUserId = pr.user ? collectUser(pr.user) : null;
 
 				return {
-					githubPrId: num(pr.id) ?? 0,
-					number: num(pr.number) ?? 0,
+					githubPrId: pr.id,
+					number: pr.number,
 					state: (pr.state === "open" ? "open" : "closed") as "open" | "closed",
-					draft: pr.draft === true,
-					title: str(pr.title) ?? "",
-					body: str(pr.body),
+					draft: pr.draft ?? false,
+					title: pr.title,
+					body: pr.body,
 					authorUserId,
 					assigneeUserIds: [] as Array<number>,
 					requestedReviewerUserIds: [] as Array<number>,
-					baseRefName: str(base.ref) ?? "",
-					headRefName: str(head.ref) ?? "",
-					headSha: str(head.sha) ?? "",
-					mergeableState: str(pr.mergeable_state),
+					baseRefName: pr.base.ref,
+					headRefName: pr.head.ref,
+					headSha: pr.head.sha,
+					mergeableState: null as string | null,
 					mergedAt: isoToMs(pr.merged_at),
 					closedAt: isoToMs(pr.closed_at),
 					githubUpdatedAt: isoToMs(pr.updated_at) ?? Date.now(),
@@ -338,8 +308,16 @@ export const fetchPullRequestsChunk = internalAction({
 
 			totalCount += pullRequests.length;
 			pagesProcessed++;
-			nextCursor = nextUrl;
-			url = nextUrl;
+
+			// If we got a full page, there might be more
+			if (page.length === 100) {
+				currentPage++;
+				nextCursor = String(currentPage);
+			} else {
+				// Partial or empty page — we're done
+				nextCursor = null;
+				break;
+			}
 		}
 
 		// Write collected users (accumulated across pages in this chunk)
@@ -357,13 +335,13 @@ export const fetchIssuesChunk = internalAction({
 	args: {
 		repositoryId: v.number(),
 		fullName: v.string(),
-		/** The GitHub API URL for this chunk, or null to start from page 1. */
+		/** Stringified page number for this chunk, or null to start from page 1. */
 		cursor: v.union(v.string(), v.null()),
 		...tokenArgs,
 	},
 	returns: v.object({
 		count: v.number(),
-		/** The next GitHub API URL, or null if all pages exhausted. */
+		/** The next page number as string, or null if all pages exhausted. */
 		nextCursor: v.union(v.string(), v.null()),
 	}),
 	handler: async (
@@ -374,66 +352,63 @@ export const fetchIssuesChunk = internalAction({
 		nextCursor: string | null;
 	}> => {
 		const { collectUser, getUsers } = createUserCollector();
+		const [owner, repo] = splitFullName(args.fullName);
 		let totalCount = 0;
 
 		const gh = await resolveGitHubClient(ctx, toTokenArgs(args));
 
-		let url: string | null =
-			args.cursor ?? `/repos/${args.fullName}/issues?state=all&per_page=100`;
-
+		let currentPage = args.cursor ? Number.parseInt(args.cursor, 10) : 1;
 		let pagesProcessed = 0;
 		let nextCursor: string | null = null;
 
-		while (url && pagesProcessed < PAGES_PER_CHUNK) {
-			// Fetch one page
-			const { page, nextUrl } = await Effect.runPromise(
-				gh
-					.use(async (fetch) => {
-						const res = await fetch(url!);
-						if (!res.ok)
-							throw new GitHubApiError({
-								status: res.status,
-								message: await res.text(),
-								url: res.url,
-							});
-						return {
-							page: (await res.json()) as Array<Record<string, unknown>>,
-							nextUrl: parseNextLink(res.headers.get("Link")),
-						};
+		while (pagesProcessed < PAGES_PER_CHUNK) {
+			const result = await Effect.runPromise(
+				gh.client
+					.issuesListForRepo(owner, repo, {
+						state: "all",
+						per_page: 100,
+						page: currentPage,
 					})
 					.pipe(Effect.orDie),
 			);
 
+			// issuesListForRepo returns IssuesListForRepo200 | BasicError
+			// Narrow to array type
+			if (!Array.isArray(result)) {
+				// BasicError response — stop pagination
+				nextCursor = null;
+				break;
+			}
+
+			// After Array.isArray narrowing, result is readonly Issue[]
+			const pageItems: ReadonlyArray<typeof Issue.Type> = result;
+
 			// GitHub's issues API includes PRs — filter them out, then transform
-			const issues = page
-				.filter((item) => !("pull_request" in item))
+			const issues = pageItems
+				.filter((item) => item.pull_request == null)
 				.map((issue) => {
-					const authorUserId = collectUser(issue.user);
-					const labels = Array.isArray(issue.labels)
-						? issue.labels
-								.map((l: unknown) =>
-									typeof l === "object" &&
-									l !== null &&
-									"name" in l &&
-									typeof l.name === "string"
-										? l.name
-										: null,
-								)
-								.filter((n: string | null): n is string => n !== null)
-						: [];
+					const authorUserId = issue.user ? collectUser(issue.user) : null;
+					const labels: Array<string> = [];
+					for (const l of issue.labels) {
+						if (typeof l === "string") {
+							labels.push(l);
+						} else if (l.name != null) {
+							labels.push(l.name);
+						}
+					}
 
 					return {
-						githubIssueId: num(issue.id) ?? 0,
-						number: num(issue.number) ?? 0,
+						githubIssueId: issue.id,
+						number: issue.number,
 						state: (issue.state === "open" ? "open" : "closed") as
 							| "open"
 							| "closed",
-						title: str(issue.title) ?? "",
-						body: str(issue.body),
+						title: issue.title,
+						body: issue.body ?? null,
 						authorUserId,
 						assigneeUserIds: [] as Array<number>,
 						labelNames: labels,
-						commentCount: num(issue.comments) ?? 0,
+						commentCount: issue.comments,
 						isPullRequest: false,
 						closedAt: isoToMs(issue.closed_at),
 						githubUpdatedAt: isoToMs(issue.updated_at) ?? Date.now(),
@@ -450,8 +425,15 @@ export const fetchIssuesChunk = internalAction({
 
 			totalCount += issues.length;
 			pagesProcessed++;
-			nextCursor = nextUrl;
-			url = nextUrl;
+
+			// If we got a full page, there might be more
+			if (result.length === 100) {
+				currentPage++;
+				nextCursor = String(currentPage);
+			} else {
+				nextCursor = null;
+				break;
+			}
 		}
 
 		// Write collected users
@@ -474,52 +456,37 @@ export const fetchCommits = internalAction({
 	returns: v.object({ count: v.number() }),
 	handler: async (ctx, args): Promise<{ count: number }> => {
 		const { collectUser, getUsers } = createUserCollector();
+		const [owner, repo] = splitFullName(args.fullName);
 
 		const allCommits = await runWithGitHub(
 			ctx,
 			toTokenArgs(args),
 			Effect.gen(function* () {
 				const gh = yield* GitHubApiClient;
-				return yield* gh.use(async (fetch) => {
-					const res = await fetch(
-						`/repos/${args.fullName}/commits?per_page=100`,
-					);
-					if (!res.ok)
-						throw new GitHubApiError({
-							status: res.status,
-							message: await res.text(),
-							url: res.url,
-						});
-					return (await res.json()) as Array<Record<string, unknown>>;
-				});
-			}).pipe(Effect.orDie),
+				return yield* gh.client
+					.reposListCommits(owner, repo, { per_page: 100 })
+					.pipe(Effect.orDie);
+			}),
 		);
 
 		const commits = allCommits.map((c) => {
-			const commit =
-				typeof c.commit === "object" && c.commit !== null
-					? (c.commit as Record<string, unknown>)
-					: {};
-			const author =
-				typeof commit.author === "object" && commit.author !== null
-					? (commit.author as Record<string, unknown>)
-					: {};
-			const committer =
-				typeof commit.committer === "object" && commit.committer !== null
-					? (commit.committer as Record<string, unknown>)
-					: {};
-
-			const authorUserId = collectUser(c.author);
-			const committerUserId = collectUser(c.committer);
-			const message = str(commit.message) ?? "";
+			// c.author is NullOr(Union(SimpleUser, EmptyObject))
+			// EmptyObject has no `id`/`login`, so check before collecting
+			const authorUserId =
+				c.author !== null && "id" in c.author ? collectUser(c.author) : null;
+			const committerUserId =
+				c.committer !== null && "id" in c.committer
+					? collectUser(c.committer)
+					: null;
+			const message = c.commit.message;
 
 			return {
-				sha: str(c.sha) ?? "",
+				sha: c.sha,
 				authorUserId,
 				committerUserId,
 				messageHeadline: message.split("\n")[0] ?? "",
-				authoredAt: isoToMs(author.date),
-				committedAt: isoToMs(committer.date),
+				authoredAt: isoToMs(c.commit.author?.date ?? null),
+				committedAt: isoToMs(c.commit.committer?.date ?? null),
 				additions: null as number | null,
 				deletions: null as number | null,
 				changedFiles: null as number | null,
@@ -562,83 +529,39 @@ export const fetchCheckRunsChunk = internalAction({
 	},
 	returns: v.object({ count: v.number() }),
 	handler: async (ctx, args): Promise<{ count: number }> => {
-		const allCheckRuns = await runWithGitHub(
-			ctx,
-			toTokenArgs(args),
-			Effect.gen(function* () {
-				const gh = yield* GitHubApiClient;
-				const results: Array<{
-					githubCheckRunId: number;
-					name: string;
-					headSha: string;
-					status: string;
-					conclusion: string | null;
-					startedAt: number | null;
-					completedAt: number | null;
-				}> = [];
+		const [owner, repo] = splitFullName(args.fullName);
 
-				for (const sha of args.headShas) {
-					const shaCheckRuns = yield* gh.use(async (fetch) => {
-						const res = await fetch(
-							`/repos/${args.fullName}/commits/${sha}/check-runs?per_page=100`,
-						);
-						if (!res.ok) {
-							// Non-critical — some repos may not have check runs
-							if (res.status === 404)
-								return [] as Array<{
-									githubCheckRunId: number;
-									name: string;
-									headSha: string;
-									status: string;
-									conclusion: string | null;
-									startedAt: number | null;
-									completedAt: number | null;
-								}>;
-							throw new GitHubApiError({
-								status: res.status,
-								message: await res.text(),
-								url: res.url,
-							});
-						}
-						const data = (await res.json()) as Record<string, unknown>;
-						const checkRuns = Array.isArray(data.check_runs)
-							? data.check_runs
-							: [];
-						const parsed: Array<{
-							githubCheckRunId: number;
-							name: string;
-							headSha: string;
-							status: string;
-							conclusion: string | null;
-							startedAt: number | null;
-							completedAt: number | null;
-						}> = [];
-						for (const cr of checkRuns) {
-							const crObj =
-								typeof cr === "object" && cr !== null
-									? (cr as Record<string, unknown>)
-									: {};
-							const id = num(crObj.id);
-							const name = str(crObj.name);
-							if (id !== null && name !== null) {
-								parsed.push({
-									githubCheckRunId: id,
-									name,
-									headSha: sha,
-									status: str(crObj.status) ?? "queued",
-									conclusion: str(crObj.conclusion),
-									startedAt: isoToMs(crObj.started_at),
-									completedAt: isoToMs(crObj.completed_at),
-								});
-							}
-						}
-						return parsed;
-					});
-					results.push(...shaCheckRuns);
-				}
-				return results;
-			}).pipe(Effect.orDie),
-		);
+		const gh = await resolveGitHubClient(ctx, toTokenArgs(args));
+
+		const allCheckRuns: Array<{
+			githubCheckRunId: number;
+			name: string;
+			headSha: string;
+			status: string;
+			conclusion: string | null;
+			startedAt: number | null;
+			completedAt: number | null;
+		}> = [];
+
+		for (const sha of args.headShas) {
+			const data = await Effect.runPromise(
+				gh.client
+					.checksListForRef(owner, repo, sha, { per_page: 100 })
+					.pipe(Effect.orDie),
+			);
+
+			for (const cr of data.check_runs) {
+				allCheckRuns.push({
+					githubCheckRunId: cr.id,
+					name: cr.name,
+					headSha: cr.head_sha,
+					status: cr.status,
+					conclusion: cr.conclusion,
+					startedAt: isoToMs(cr.started_at),
+					completedAt: isoToMs(cr.completed_at),
+				});
+			}
+		}
 
 		// Write check runs in batches
 		for (let i = 0; i < allCheckRuns.length; i += 50) {
@@ -671,154 +594,83 @@ export const fetchWorkflowRuns = internalAction({
 		args,
 	): Promise<{ runCount: number; jobCount: number }> => {
 		const { collectUser, getUsers } = createUserCollector();
+		const [owner, repo] = splitFullName(args.fullName);
 
-		const { workflowRuns, workflowJobs } = await runWithGitHub(
-			ctx,
-			toTokenArgs(args),
-			Effect.gen(function* () {
-				const gh = yield* GitHubApiClient;
+		const gh = await resolveGitHubClient(ctx, toTokenArgs(args));
 
-				// --- Fetch workflow runs ---
-				type WfRun = {
-					githubRunId: number;
-					workflowId: number;
-					workflowName: string | null;
-					runNumber: number;
-					runAttempt: number;
-					event: string;
-					status: string | null;
-					conclusion: string | null;
-					headBranch: string | null;
-					headSha: string;
-					actorUserId: number | null;
-					htmlUrl: string | null;
-					createdAt: number;
-					updatedAt: number;
-				};
-
-				const allWorkflowRuns: Array<WfRun> = yield* gh.use(async (fetch) => {
-					const res = await fetch(
-						`/repos/${args.fullName}/actions/runs?per_page=100`,
-					);
-					if (!res.ok) {
-						if (res.status === 404) return [];
-						throw new GitHubApiError({
-							status: res.status,
-							message: await res.text(),
-							url: res.url,
-						});
-					}
-					const data = (await res.json()) as Record<string, unknown>;
-					const runs = Array.isArray(data.workflow_runs)
-						? data.workflow_runs
-						: [];
-					const parsed: Array<WfRun> = [];
-					for (const r of runs) {
-						const rObj =
-							typeof r === "object" && r !== null
-								? (r as Record<string, unknown>)
-								: {};
-						const id = num(rObj.id);
-						const wfId = num(rObj.workflow_id);
-						const runNumber = num(rObj.run_number);
-						if (id !== null && wfId !== null && runNumber !== null) {
-							const actorUserId = collectUser(rObj.actor);
-							parsed.push({
-								githubRunId: id,
-								workflowId: wfId,
-								workflowName: str(rObj.name),
-								runNumber,
-								runAttempt: num(rObj.run_attempt) ?? 1,
-								event: str(rObj.event) ?? "unknown",
-								status: str(rObj.status),
-								conclusion: str(rObj.conclusion),
-								headBranch: str(rObj.head_branch),
-								headSha: str(rObj.head_sha) ?? "",
-								actorUserId,
-								htmlUrl: str(rObj.html_url),
-								createdAt: isoToMs(rObj.created_at) ?? Date.now(),
-								updatedAt: isoToMs(rObj.updated_at) ?? Date.now(),
-							});
-						}
-					}
-					return parsed;
-				});
-
-				// --- Fetch jobs for recent/active workflow runs ---
-				const activeRunIds = allWorkflowRuns
-					.filter(
-						(r) =>
-							r.status === "in_progress" ||
-							r.status === "queued" ||
-							r.conclusion !== null,
-					)
-					.slice(0, 20)
-					.map((r) => r.githubRunId);
-
-				type WfJob = {
-					githubJobId: number;
-					githubRunId: number;
-					name: string;
-					status: string;
-					conclusion: string | null;
-					startedAt: number | null;
-					completedAt: number | null;
-					runnerName: string | null;
-					stepsJson: string | null;
-				};
-
-				const allWorkflowJobs: Array<WfJob> = [];
-
-				for (const runId of activeRunIds) {
-					const jobs = yield* gh.use(async (fetch) => {
-						const res = await fetch(
-							`/repos/${args.fullName}/actions/runs/${runId}/jobs?per_page=100`,
-						);
-						if (!res.ok) {
-							if (res.status === 404) return [] as Array<WfJob>;
-							throw new GitHubApiError({
-								status: res.status,
-								message: await res.text(),
-								url: res.url,
-							});
-						}
-						const data = (await res.json()) as Record<string, unknown>;
-						const jobsList = Array.isArray(data.jobs) ? data.jobs : [];
-						const parsed: Array<WfJob> = [];
-						for (const j of jobsList) {
-							const jObj =
-								typeof j === "object" && j !== null
-									? (j as Record<string, unknown>)
-									: {};
-							const jobId = num(jObj.id);
-							const name = str(jObj.name);
-							if (jobId !== null && name !== null) {
-								parsed.push({
-									githubJobId: jobId,
-									githubRunId: runId,
-									name,
-									status: str(jObj.status) ?? "queued",
-									conclusion: str(jObj.conclusion),
-									startedAt: isoToMs(jObj.started_at),
-									completedAt: isoToMs(jObj.completed_at),
-									runnerName: str(jObj.runner_name),
-									stepsJson: Array.isArray(jObj.steps)
-										? JSON.stringify(jObj.steps)
-										: null,
-								});
-							}
-						}
-						return parsed;
-					});
-					allWorkflowJobs.push(...jobs);
-				}
-
-				return {
-					workflowRuns: allWorkflowRuns,
-					workflowJobs: allWorkflowJobs,
-				};
-			}).pipe(Effect.orDie),
+		// --- Fetch workflow runs ---
+		const runsData = await Effect.runPromise(
+			gh.client
+				.actionsListWorkflowRunsForRepo(owner, repo, { per_page: 100 })
+				.pipe(Effect.orDie),
 		);
+
+		const workflowRuns = runsData.workflow_runs.map((r) => {
+			const actorUserId = r.actor ? collectUser(r.actor) : null;
+			return {
+				githubRunId: r.id,
+				workflowId: r.workflow_id,
+				workflowName: r.name ?? null,
+				runNumber: r.run_number,
+				runAttempt: r.run_attempt ?? 1,
+				event: r.event,
+				status: r.status,
+				conclusion: r.conclusion,
+				headBranch: r.head_branch,
+				headSha: r.head_sha,
+				actorUserId,
+				htmlUrl: r.html_url,
+				createdAt: isoToMs(r.created_at) ?? Date.now(),
+				updatedAt: isoToMs(r.updated_at) ?? Date.now(),
+			};
+		});
+
+		// --- Fetch jobs for recent/active workflow runs ---
+		const activeRunIds = workflowRuns
+			.filter(
+				(r) =>
+					r.status === "in_progress" ||
+					r.status === "queued" ||
+					r.conclusion !== null,
+			)
+			.slice(0, 20)
+			.map((r) => r.githubRunId);
+
+		const allWorkflowJobs: Array<{
+			githubJobId: number;
+			githubRunId: number;
+			name: string;
+			status: string;
+			conclusion: string | null;
+			startedAt: number | null;
+			completedAt: number | null;
+			runnerName: string | null;
+			stepsJson: string | null;
+		}> = [];
+
+		for (const runId of activeRunIds) {
+			const jobsData = await Effect.runPromise(
+				gh.client
+					.actionsListJobsForWorkflowRun(owner, repo, String(runId), {
+						per_page: 100,
+					})
+					.pipe(Effect.orDie),
+			);
+
+			for (const j of jobsData.jobs) {
+				allWorkflowJobs.push({
+					githubJobId: j.id,
+					githubRunId: j.run_id,
+					name: j.name,
+					status: j.status,
+					conclusion: j.conclusion,
+					startedAt: isoToMs(j.started_at),
+					completedAt: isoToMs(j.completed_at),
+					runnerName: j.runner_name,
+					stepsJson: j.steps ? JSON.stringify(j.steps) : null,
+				});
+			}
+		}
 
 		// Write workflow runs in batches
 		for (let i = 0; i < workflowRuns.length; i += 50) {
@@ -829,10 +681,10 @@ export const fetchWorkflowRuns = internalAction({
 		}
 
 		// Write workflow jobs in batches
-		for (let i = 0; i < workflowJobs.length; i += 50) {
+		for (let i = 0; i < allWorkflowJobs.length; i += 50) {
 			await ctx.runMutation(internal.rpc.bootstrapWrite.upsertWorkflowJobs, {
 				repositoryId: args.repositoryId,
-				workflowJobs: workflowJobs.slice(i, i + 50),
+				workflowJobs: allWorkflowJobs.slice(i, i + 50),
 			});
 		}
 
@@ -841,7 +693,7 @@ export const fetchWorkflowRuns = internalAction({
 
 		return {
 			runCount: workflowRuns.length,
-			jobCount: workflowJobs.length,
+			jobCount: allWorkflowJobs.length,
 		};
 	},
 });

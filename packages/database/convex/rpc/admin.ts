@@ -323,21 +323,40 @@ systemStatusDef.implement(() =>
 			)
 			.take(cap);
 
-		// -- Write operations summary (single bounded scan, count in-memory) --
-		const allWriteOps = yield* ctx.db
-			.query("github_write_operations")
+		// -- Write operations summary (optimistic domain rows) --
+		const optimisticIssues = yield* ctx.db.query("github_issues").take(cap);
+		const optimisticComments = yield* ctx.db
+			.query("github_issue_comments")
 			.take(cap);
-		const writeOpsPending = allWriteOps.filter(
-			(o) => o.state === "pending",
+		const optimisticPrs = yield* ctx.db.query("github_pull_requests").take(cap);
+		const optimisticReviews = yield* ctx.db
+			.query("github_pull_request_reviews")
+			.take(cap);
+
+		const optimisticStates = [
+			...optimisticIssues
+				.map((row) => row.optimisticState)
+				.filter((state) => state !== null && state !== undefined),
+			...optimisticComments
+				.map((row) => row.optimisticState)
+				.filter((state) => state !== null && state !== undefined),
+			...optimisticPrs
+				.map((row) => row.optimisticState)
+				.filter((state) => state !== null && state !== undefined),
+			...optimisticReviews
+				.map((row) => row.optimisticState)
+				.filter((state) => state !== null && state !== undefined),
+		];
+
+		const writeOpsPending = optimisticStates.filter(
+			(state) => state === "pending",
 		).length;
-		const writeOpsCompleted = allWriteOps.filter(
-			(o) => o.state === "completed",
+		const writeOpsCompleted = 0;
+		const writeOpsFailed = optimisticStates.filter(
+			(state) => state === "failed",
 		).length;
-		const writeOpsFailed = allWriteOps.filter(
-			(o) => o.state === "failed",
-		).length;
-		const writeOpsConfirmed = allWriteOps.filter(
-			(o) => o.state === "confirmed",
+		const writeOpsConfirmed = optimisticStates.filter(
+			(state) => state === "confirmed",
 		).length;
 
 		// -- Projection staleness (materialized views removed) --

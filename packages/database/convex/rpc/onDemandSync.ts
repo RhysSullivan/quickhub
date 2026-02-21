@@ -29,11 +29,8 @@ import {
 	ConfectQueryCtx,
 	confectSchema,
 } from "../confect";
-import {
-	GitHubApiClient,
-	GitHubApiError,
-	GitHubRateLimitError,
-} from "../shared/githubApi";
+import type { SimpleUser } from "../shared/generated_github_client";
+import { GitHubApiClient } from "../shared/githubApi";
 import { lookupGitHubTokenByUserIdConfect } from "../shared/githubToken";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
 
@@ -59,55 +56,45 @@ class RepoNotFoundOnGitHub extends Schema.TaggedError<RepoNotFoundOnGitHub>()(
 ) {}
 
 // ---------------------------------------------------------------------------
-// GitHub response parsing helpers (shared with bootstrap)
+// ISO date string → millisecond timestamp helper
 // ---------------------------------------------------------------------------
 
-const num = (v: unknown): number | null => (typeof v === "number" ? v : null);
-const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
-const bool = (v: unknown): boolean => v === true;
-
-const isoToMs = (v: unknown): number | null => {
-	if (typeof v !== "string") return null;
+const isoToMs = (v: string | null | undefined): number | null => {
+	if (v == null) return null;
 	const ms = new Date(v).getTime();
 	return Number.isNaN(ms) ? null : ms;
 };
 
-const userType = (v: unknown): "User" | "Bot" | "Organization" =>
-	v === "Bot" ? "Bot" : v === "Organization" ? "Organization" : "User";
+// ---------------------------------------------------------------------------
+// Typed user collector
+// ---------------------------------------------------------------------------
 
-type UserRecord = {
-	githubUserId: number;
-	login: string;
-	avatarUrl: string | null;
-	siteAdmin: boolean;
-	type: "User" | "Bot" | "Organization";
-};
+/** The subset of SimpleUser / NullableSimpleUser fields the collector reads. */
+type GitHubUser = Pick<
+	typeof SimpleUser.Type,
+	"id" | "login" | "avatar_url" | "site_admin" | "type"
+>;
+
+const toUserType = (t: string): "User" | "Bot" | "Organization" =>
+	t === "Bot" ? "Bot" : t === "Organization" ? "Organization" : "User";
 
 const createUserCollector = () => {
-	const userMap = new Map<number, UserRecord>();
+	const userMap = new Map<number, ReturnType<typeof makeUserRecord>>();
 
-	const collect = (u: unknown): number | null => {
-		if (
-			u !== null &&
-			u !== undefined &&
-			typeof u === "object" &&
-			"id" in u &&
-			"login" in u
-		) {
-			const id = num(u.id);
-			const login = str(u.login);
-			if (id !== null && login !== null && !userMap.has(id)) {
-				userMap.set(id, {
-					githubUserId: id,
-					login,
-					avatarUrl: "avatar_url" in u ? str(u.avatar_url) : null,
-					siteAdmin: "site_admin" in u ? u.site_admin === true : false,
-					type: "type" in u ? userType(u.type) : "User",
-				});
-			}
-			return id;
+	const makeUserRecord = (u: GitHubUser) => ({
+		githubUserId: u.id,
+		login: u.login,
+		avatarUrl: u.avatar_url,
+		siteAdmin: u.site_admin,
+		type: toUserType(u.type),
+	});
+
+	const collect = (u: GitHubUser | null | undefined): number | null => {
+		if (u == null) return null;
+		if (!userMap.has(u.id)) {
+			userMap.set(u.id, makeUserRecord(u));
 		}
-		return null;
+		return u.id;
 	};
 
 	const getUsers = () => [...userMap.values()];
@@ -571,42 +558,17 @@ syncPullRequestDef.implement((args) =>
 		}
 
 		// 2. Fetch repo metadata from GitHub to ensure repo record exists
-		const repoData = yield* gh
-			.use(async (fetch) => {
-				const res = await fetch(`/repos/${fullName}`);
-				if (res.status === 404) return null;
-				if (!res.ok) {
-					throw new GitHubApiError({
-						status: res.status,
-						message: await res.text(),
-						url: res.url,
-					});
-				}
-				return (await res.json()) as Record<string, unknown>;
-			})
-			.pipe(
-				Effect.catchTags({
-					GitHubApiError: () => Effect.succeed(null),
-					GitHubRateLimitError: () => Effect.succeed(null),
-				}),
-			);
+		// reposGet returns FullRepository | BasicError. Narrow via "id" (only on FullRepository).
+		const repoResult = yield* gh.client
+			.reposGet(args.ownerLogin, args.name)
+			.pipe(Effect.catchAll(() => Effect.succeed(null)));
 
-		if (repoData === null) {
+		if (repoResult === null || !("id" in repoResult)) {
 			return yield* new RepoNotFoundOnGitHub({
 				ownerLogin: args.ownerLogin,
 				name: args.name,
 			});
 		}
-
-		const githubRepoId = num(repoData.id);
-		if (githubRepoId === null) {
-			return yield* new RepoNotFoundOnGitHub({
-				ownerLogin: args.ownerLogin,
-				name: args.name,
-			});
-		}
-
-		const owner = repoData.owner as Record<string, unknown> | null;
 
 		// Ensure repo record exists
 		const ensureResult = yield* ctx.runMutation(
@@ -615,11 +577,11 @@ syncPullRequestDef.implement((args) =>
 				ownerLogin: args.ownerLogin,
 				name: args.name,
 				repoData: {
-					githubRepoId,
-					ownerId: num(owner?.id) ?? 0,
-					defaultBranch: str(repoData.default_branch) ?? "main",
-					visibility: bool(repoData.private) ? "private" : "public",
-					isPrivate: bool(repoData.private),
+					githubRepoId: repoResult.id,
+					ownerId: repoResult.owner.id,
+					defaultBranch: repoResult.default_branch,
+					visibility: repoResult.private ? "private" : "public",
+					isPrivate: repoResult.private,
 					fullName,
 				},
 			},
@@ -643,26 +605,10 @@ syncPullRequestDef.implement((args) =>
 
 		const repositoryId = ensureDecoded.repositoryId;
 
-		// 3. Fetch the PR from GitHub
-		const prData = yield* gh
-			.use(async (fetch) => {
-				const res = await fetch(`/repos/${fullName}/pulls/${args.number}`);
-				if (res.status === 404) return null;
-				if (!res.ok) {
-					throw new GitHubApiError({
-						status: res.status,
-						message: await res.text(),
-						url: res.url,
-					});
-				}
-				return (await res.json()) as Record<string, unknown>;
-			})
-			.pipe(
-				Effect.catchTags({
-					GitHubApiError: () => Effect.succeed(null),
-					GitHubRateLimitError: () => Effect.succeed(null),
-				}),
-			);
+		// 3. Fetch the PR from GitHub (typed client)
+		const prData = yield* gh.client
+			.pullsGet(args.ownerLogin, args.name, String(args.number))
+			.pipe(Effect.catchAll(() => Effect.succeed(null)));
 
 		if (prData === null) {
 			return yield* new EntityNotFound({
@@ -673,31 +619,22 @@ syncPullRequestDef.implement((args) =>
 			});
 		}
 
-		const head =
-			typeof prData.head === "object" && prData.head !== null
-				? (prData.head as Record<string, unknown>)
-				: {};
-		const base =
-			typeof prData.base === "object" && prData.base !== null
-				? (prData.base as Record<string, unknown>)
-				: {};
-
 		const authorUserId = users.collect(prData.user);
 
 		const pr = {
-			githubPrId: num(prData.id) ?? 0,
-			number: num(prData.number) ?? args.number,
-			state: (prData.state === "open" ? "open" : "closed") as "open" | "closed",
+			githubPrId: prData.id,
+			number: prData.number,
+			state: prData.state === "open" ? ("open" as const) : ("closed" as const),
 			draft: prData.draft === true,
-			title: str(prData.title) ?? "",
-			body: str(prData.body),
+			title: prData.title,
+			body: prData.body ?? null,
 			authorUserId,
 			assigneeUserIds: [] as Array<number>,
 			requestedReviewerUserIds: [] as Array<number>,
-			baseRefName: str(base.ref) ?? "",
-			headRefName: str(head.ref) ?? "",
-			headSha: str(head.sha) ?? "",
-			mergeableState: str(prData.mergeable_state),
+			baseRefName: prData.base.ref,
+			headRefName: prData.head.ref,
+			headSha: prData.head.sha,
+			mergeableState: prData.mergeable_state ?? null,
 			mergedAt: isoToMs(prData.merged_at),
 			closedAt: isoToMs(prData.closed_at),
 			githubUpdatedAt: isoToMs(prData.updated_at) ?? Date.now(),
@@ -709,25 +646,17 @@ syncPullRequestDef.implement((args) =>
 			pullRequests: [pr],
 		});
 
-		// 4. Fetch comments for this PR
-		const rawComments = yield* gh
-			.use(async (fetch) => {
-				const res = await fetch(
-					`/repos/${fullName}/issues/${args.number}/comments?per_page=100`,
-				);
-				if (!res.ok) return [];
-				return (await res.json()) as Array<Record<string, unknown>>;
+		// 4. Fetch comments for this PR (typed client)
+		const rawComments = yield* gh.client
+			.issuesListComments(args.ownerLogin, args.name, String(args.number), {
+				per_page: 100,
 			})
-			.pipe(
-				Effect.catchAll(() =>
-					Effect.succeed([] as Array<Record<string, unknown>>),
-				),
-			);
+			.pipe(Effect.catchAll(() => Effect.succeed([] as const)));
 
 		const comments = rawComments.map((c) => ({
-			githubCommentId: num(c.id) ?? 0,
+			githubCommentId: c.id,
 			authorUserId: users.collect(c.user),
-			body: str(c.body) ?? "",
+			body: c.body ?? "",
 			createdAt: isoToMs(c.created_at) ?? Date.now(),
 			updatedAt: isoToMs(c.updated_at) ?? Date.now(),
 		}));
@@ -740,27 +669,19 @@ syncPullRequestDef.implement((args) =>
 			});
 		}
 
-		// 5. Fetch reviews
-		const rawReviews = yield* gh
-			.use(async (fetch) => {
-				const res = await fetch(
-					`/repos/${fullName}/pulls/${args.number}/reviews?per_page=100`,
-				);
-				if (!res.ok) return [];
-				return (await res.json()) as Array<Record<string, unknown>>;
+		// 5. Fetch reviews (typed client)
+		const rawReviews = yield* gh.client
+			.pullsListReviews(args.ownerLogin, args.name, String(args.number), {
+				per_page: 100,
 			})
-			.pipe(
-				Effect.catchAll(() =>
-					Effect.succeed([] as Array<Record<string, unknown>>),
-				),
-			);
+			.pipe(Effect.catchAll(() => Effect.succeed([] as const)));
 
 		const reviews = rawReviews.map((r) => ({
-			githubReviewId: num(r.id) ?? 0,
+			githubReviewId: r.id,
 			authorUserId: users.collect(r.user),
-			state: str(r.state) ?? "COMMENTED",
+			state: r.state,
 			submittedAt: isoToMs(r.submitted_at),
-			commitSha: str(r.commit_id),
+			commitSha: r.commit_id ?? null,
 		}));
 
 		if (reviews.length > 0) {
@@ -771,36 +692,31 @@ syncPullRequestDef.implement((args) =>
 			});
 		}
 
-		// 6. Fetch review comments (inline PR comments)
-		const rawReviewComments = yield* gh
-			.use(async (fetch) => {
-				const res = await fetch(
-					`/repos/${fullName}/pulls/${args.number}/comments?per_page=100`,
-				);
-				if (!res.ok) return [];
-				return (await res.json()) as Array<Record<string, unknown>>;
-			})
-			.pipe(
-				Effect.catchAll(() =>
-					Effect.succeed([] as Array<Record<string, unknown>>),
-				),
-			);
+		// 6. Fetch review comments / inline PR comments (typed client)
+		const rawReviewComments = yield* gh.client
+			.pullsListReviewComments(
+				args.ownerLogin,
+				args.name,
+				String(args.number),
+				{ per_page: 100 },
+			)
+			.pipe(Effect.catchAll(() => Effect.succeed([] as const)));
 
 		const reviewComments = rawReviewComments.map((c) => ({
-			githubReviewCommentId: num(c.id) ?? 0,
-			githubReviewId: num(c.pull_request_review_id),
-			inReplyToGithubReviewCommentId: num(c.in_reply_to_id),
+			githubReviewCommentId: c.id,
+			githubReviewId: c.pull_request_review_id ?? null,
+			inReplyToGithubReviewCommentId: c.in_reply_to_id ?? null,
 			authorUserId: users.collect(c.user),
-			body: str(c.body) ?? "",
-			path: str(c.path),
-			line: num(c.line),
-			originalLine: num(c.original_line),
-			startLine: num(c.start_line),
-			side: str(c.side),
-			startSide: str(c.start_side),
-			commitSha: str(c.commit_id),
-			originalCommitSha: str(c.original_commit_id),
-			htmlUrl: str(c.html_url),
+			body: c.body,
+			path: c.path ?? null,
+			line: c.line ?? null,
+			originalLine: c.original_line ?? null,
+			startLine: c.start_line ?? null,
+			side: c.side ?? null,
+			startSide: c.start_side ?? null,
+			commitSha: c.commit_id ?? null,
+			originalCommitSha: c.original_commit_id ?? null,
+			htmlUrl: c.html_url ?? null,
 			createdAt: isoToMs(c.created_at) ?? Date.now(),
 			updatedAt: isoToMs(c.updated_at) ?? Date.now(),
 		}));
@@ -813,53 +729,27 @@ syncPullRequestDef.implement((args) =>
 			});
 		}
 
-		// 7. Fetch check runs for the PR's head SHA
+		// 7. Fetch check runs for the PR's head SHA (typed client)
 		if (pr.headSha !== "") {
-			const rawCheckRuns = yield* gh
-				.use(async (fetch) => {
-					const res = await fetch(
-						`/repos/${fullName}/commits/${pr.headSha}/check-runs?per_page=100`,
-					);
-					if (!res.ok) return [];
-					const data = (await res.json()) as Record<string, unknown>;
-					return Array.isArray(data.check_runs)
-						? (data.check_runs as Array<Record<string, unknown>>)
-						: [];
+			const checkRunsResult = yield* gh.client
+				.checksListForRef(args.ownerLogin, args.name, pr.headSha, {
+					per_page: 100,
 				})
 				.pipe(
 					Effect.catchAll(() =>
-						Effect.succeed([] as Array<Record<string, unknown>>),
+						Effect.succeed({ total_count: 0, check_runs: [] }),
 					),
 				);
 
-			const checkRuns = rawCheckRuns
-				.map((cr) => {
-					const id = num(cr.id);
-					const crName = str(cr.name);
-					if (id === null || crName === null) return null;
-					return {
-						githubCheckRunId: id,
-						name: crName,
-						headSha: pr.headSha,
-						status: str(cr.status) ?? "queued",
-						conclusion: str(cr.conclusion),
-						startedAt: isoToMs(cr.started_at),
-						completedAt: isoToMs(cr.completed_at),
-					};
-				})
-				.filter(
-					(
-						cr,
-					): cr is {
-						githubCheckRunId: number;
-						name: string;
-						headSha: string;
-						status: string;
-						conclusion: string | null;
-						startedAt: number | null;
-						completedAt: number | null;
-					} => cr !== null,
-				);
+			const checkRuns = checkRunsResult.check_runs.map((cr) => ({
+				githubCheckRunId: cr.id,
+				name: cr.name,
+				headSha: pr.headSha,
+				status: cr.status,
+				conclusion: cr.conclusion ?? null,
+				startedAt: isoToMs(cr.started_at),
+				completedAt: isoToMs(cr.completed_at),
+			}));
 
 			if (checkRuns.length > 0) {
 				yield* ctx.runMutation(internal.rpc.bootstrapWrite.upsertCheckRuns, {
@@ -985,43 +875,18 @@ syncIssueDef.implement((args) =>
 			return { synced: false, repositoryId: decoded.repositoryId };
 		}
 
-		// 2. Fetch repo metadata
-		const repoData = yield* gh
-			.use(async (fetch) => {
-				const res = await fetch(`/repos/${fullName}`);
-				if (res.status === 404) return null;
-				if (!res.ok) {
-					throw new GitHubApiError({
-						status: res.status,
-						message: await res.text(),
-						url: res.url,
-					});
-				}
-				return (await res.json()) as Record<string, unknown>;
-			})
-			.pipe(
-				Effect.catchTags({
-					GitHubApiError: () => Effect.succeed(null),
-					GitHubRateLimitError: () => Effect.succeed(null),
-				}),
-			);
+		// 2. Fetch repo metadata (typed client)
+		// reposGet returns FullRepository | BasicError. Narrow via "id".
+		const repoResult = yield* gh.client
+			.reposGet(args.ownerLogin, args.name)
+			.pipe(Effect.catchAll(() => Effect.succeed(null)));
 
-		if (repoData === null) {
+		if (repoResult === null || !("id" in repoResult)) {
 			return yield* new RepoNotFoundOnGitHub({
 				ownerLogin: args.ownerLogin,
 				name: args.name,
 			});
 		}
-
-		const githubRepoId = num(repoData.id);
-		if (githubRepoId === null) {
-			return yield* new RepoNotFoundOnGitHub({
-				ownerLogin: args.ownerLogin,
-				name: args.name,
-			});
-		}
-
-		const owner = repoData.owner as Record<string, unknown> | null;
 
 		// Ensure repo record
 		const ensureResult = yield* ctx.runMutation(
@@ -1030,11 +895,11 @@ syncIssueDef.implement((args) =>
 				ownerLogin: args.ownerLogin,
 				name: args.name,
 				repoData: {
-					githubRepoId,
-					ownerId: num(owner?.id) ?? 0,
-					defaultBranch: str(repoData.default_branch) ?? "main",
-					visibility: bool(repoData.private) ? "private" : "public",
-					isPrivate: bool(repoData.private),
+					githubRepoId: repoResult.id,
+					ownerId: repoResult.owner.id,
+					defaultBranch: repoResult.default_branch,
+					visibility: repoResult.private ? "private" : "public",
+					isPrivate: repoResult.private,
 					fullName,
 				},
 			},
@@ -1058,28 +923,13 @@ syncIssueDef.implement((args) =>
 
 		const repositoryId = ensureDecoded.repositoryId;
 
-		// 3. Fetch the issue from GitHub
-		const issueData = yield* gh
-			.use(async (fetch) => {
-				const res = await fetch(`/repos/${fullName}/issues/${args.number}`);
-				if (res.status === 404) return null;
-				if (!res.ok) {
-					throw new GitHubApiError({
-						status: res.status,
-						message: await res.text(),
-						url: res.url,
-					});
-				}
-				return (await res.json()) as Record<string, unknown>;
-			})
-			.pipe(
-				Effect.catchTags({
-					GitHubApiError: () => Effect.succeed(null),
-					GitHubRateLimitError: () => Effect.succeed(null),
-				}),
-			);
+		// 3. Fetch the issue from GitHub (typed client)
+		// issuesGet returns Issue | BasicError. Narrow via "id".
+		const issueResult = yield* gh.client
+			.issuesGet(args.ownerLogin, args.name, String(args.number))
+			.pipe(Effect.catchAll(() => Effect.succeed(null)));
 
-		if (issueData === null) {
+		if (issueResult === null || !("id" in issueResult)) {
 			return yield* new EntityNotFound({
 				ownerLogin: args.ownerLogin,
 				name: args.name,
@@ -1089,38 +939,28 @@ syncIssueDef.implement((args) =>
 		}
 
 		// GitHub's issues API also returns PRs — check if this is actually a PR
-		const isPullRequest = "pull_request" in issueData;
+		const isPullRequest = issueResult.pull_request !== undefined;
 
-		const authorUserId = userCollector.collect(issueData.user);
+		const authorUserId = userCollector.collect(issueResult.user);
 
-		const labels = Array.isArray(issueData.labels)
-			? issueData.labels
-					.map((l: unknown) =>
-						typeof l === "object" &&
-						l !== null &&
-						"name" in l &&
-						typeof l.name === "string"
-							? l.name
-							: null,
-					)
-					.filter((n: string | null): n is string => n !== null)
-			: [];
+		const labels = issueResult.labels
+			.map((l) => (typeof l === "string" ? l : (l.name ?? null)))
+			.filter((n): n is string => n !== null);
 
 		const issue = {
-			githubIssueId: num(issueData.id) ?? 0,
-			number: num(issueData.number) ?? args.number,
-			state: (issueData.state === "open" ? "open" : "closed") as
-				| "open"
-				| "closed",
-			title: str(issueData.title) ?? "",
-			body: str(issueData.body),
+			githubIssueId: issueResult.id,
+			number: issueResult.number,
+			state:
+				issueResult.state === "open" ? ("open" as const) : ("closed" as const),
+			title: issueResult.title,
+			body: issueResult.body ?? null,
 			authorUserId,
 			assigneeUserIds: [] as Array<number>,
 			labelNames: labels,
-			commentCount: num(issueData.comments) ?? 0,
+			commentCount: issueResult.comments,
 			isPullRequest,
-			closedAt: isoToMs(issueData.closed_at),
-			githubUpdatedAt: isoToMs(issueData.updated_at) ?? Date.now(),
+			closedAt: isoToMs(issueResult.closed_at),
+			githubUpdatedAt: isoToMs(issueResult.updated_at) ?? Date.now(),
 		};
 
 		// Upsert the issue
@@ -1129,25 +969,17 @@ syncIssueDef.implement((args) =>
 			issues: [issue],
 		});
 
-		// 4. Fetch comments
-		const rawComments = yield* gh
-			.use(async (fetch) => {
-				const res = await fetch(
-					`/repos/${fullName}/issues/${args.number}/comments?per_page=100`,
-				);
-				if (!res.ok) return [];
-				return (await res.json()) as Array<Record<string, unknown>>;
+		// 4. Fetch comments (typed client)
+		const rawComments = yield* gh.client
+			.issuesListComments(args.ownerLogin, args.name, String(args.number), {
+				per_page: 100,
 			})
-			.pipe(
-				Effect.catchAll(() =>
-					Effect.succeed([] as Array<Record<string, unknown>>),
-				),
-			);
+			.pipe(Effect.catchAll(() => Effect.succeed([] as const)));
 
 		const comments = rawComments.map((c) => ({
-			githubCommentId: num(c.id) ?? 0,
+			githubCommentId: c.id,
 			authorUserId: userCollector.collect(c.user),
-			body: str(c.body) ?? "",
+			body: c.body ?? "",
 			createdAt: isoToMs(c.created_at) ?? Date.now(),
 			updatedAt: isoToMs(c.updated_at) ?? Date.now(),
 		}));

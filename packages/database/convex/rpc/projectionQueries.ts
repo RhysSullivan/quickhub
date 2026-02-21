@@ -79,6 +79,10 @@ const listPullRequestsDef = factory.query({
 		Schema.Struct({
 			number: Schema.Number,
 			state: Schema.Literal("open", "closed"),
+			optimisticState: Schema.NullOr(
+				Schema.Literal("pending", "failed", "confirmed"),
+			),
+			optimisticErrorMessage: Schema.NullOr(Schema.String),
 			draft: Schema.Boolean,
 			title: Schema.String,
 			authorLogin: Schema.NullOr(Schema.String),
@@ -106,6 +110,10 @@ const listIssuesDef = factory.query({
 		Schema.Struct({
 			number: Schema.Number,
 			state: Schema.Literal("open", "closed"),
+			optimisticState: Schema.NullOr(
+				Schema.Literal("pending", "failed", "confirmed"),
+			),
+			optimisticErrorMessage: Schema.NullOr(Schema.String),
 			title: Schema.String,
 			authorLogin: Schema.NullOr(Schema.String),
 			authorAvatarUrl: Schema.NullOr(Schema.String),
@@ -202,6 +210,10 @@ const requestPrFileSyncDef = factory.mutation({
 const PrListItem = Schema.Struct({
 	number: Schema.Number,
 	state: Schema.Literal("open", "closed"),
+	optimisticState: Schema.NullOr(
+		Schema.Literal("pending", "failed", "confirmed"),
+	),
+	optimisticErrorMessage: Schema.NullOr(Schema.String),
 	draft: Schema.Boolean,
 	title: Schema.String,
 	authorLogin: Schema.NullOr(Schema.String),
@@ -217,6 +229,10 @@ const PrListItem = Schema.Struct({
 const IssueListItem = Schema.Struct({
 	number: Schema.Number,
 	state: Schema.Literal("open", "closed"),
+	optimisticState: Schema.NullOr(
+		Schema.Literal("pending", "failed", "confirmed"),
+	),
+	optimisticErrorMessage: Schema.NullOr(Schema.String),
 	title: Schema.String,
 	authorLogin: Schema.NullOr(Schema.String),
 	authorAvatarUrl: Schema.NullOr(Schema.String),
@@ -330,6 +346,28 @@ const listWorkflowRunsPaginatedDef = factory.query({
 	success: PaginationResultSchema(WorkflowRunListItem),
 });
 
+/**
+ * Search issues and PRs by title within a repository.
+ */
+const searchIssuesAndPrsDef = factory.query({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		query: Schema.String,
+		limit: Schema.optional(Schema.Number),
+	},
+	success: Schema.Array(
+		Schema.Struct({
+			type: Schema.Literal("pr", "issue"),
+			number: Schema.Number,
+			state: Schema.Literal("open", "closed"),
+			title: Schema.String,
+			authorLogin: Schema.NullOr(Schema.String),
+			githubUpdatedAt: Schema.Number,
+		}),
+	),
+});
+
 const WorkflowJobSchema = Schema.Struct({
 	githubJobId: Schema.Number,
 	name: Schema.String,
@@ -389,6 +427,10 @@ const ReviewSchema = Schema.Struct({
 	authorAvatarUrl: Schema.NullOr(Schema.String),
 	state: Schema.String,
 	submittedAt: Schema.NullOr(Schema.Number),
+	optimisticState: Schema.NullOr(
+		Schema.Literal("pending", "failed", "confirmed"),
+	),
+	optimisticErrorMessage: Schema.NullOr(Schema.String),
 });
 
 const ReviewCommentSchema = Schema.Struct({
@@ -420,6 +462,11 @@ const CheckRunSchema = Schema.Struct({
 /**
  * Get full issue detail including body and comments.
  */
+const AssigneeSchema = Schema.Struct({
+	login: Schema.String,
+	avatarUrl: Schema.NullOr(Schema.String),
+});
+
 const getIssueDetailDef = factory.query({
 	payload: {
 		ownerLogin: Schema.String,
@@ -431,10 +478,25 @@ const getIssueDetailDef = factory.query({
 			repositoryId: Schema.Number,
 			number: Schema.Number,
 			state: Schema.Literal("open", "closed"),
+			optimisticOperationType: Schema.NullOr(
+				Schema.Literal(
+					"create_issue",
+					"create_comment",
+					"update_issue_state",
+					"merge_pull_request",
+					"update_labels",
+					"update_assignees",
+				),
+			),
+			optimisticState: Schema.NullOr(
+				Schema.Literal("pending", "failed", "confirmed"),
+			),
+			optimisticErrorMessage: Schema.NullOr(Schema.String),
 			title: Schema.String,
 			body: Schema.NullOr(Schema.String),
 			authorLogin: Schema.NullOr(Schema.String),
 			authorAvatarUrl: Schema.NullOr(Schema.String),
+			assignees: Schema.Array(AssigneeSchema),
 			labelNames: Schema.Array(Schema.String),
 			commentCount: Schema.Number,
 			closedAt: Schema.NullOr(Schema.Number),
@@ -458,11 +520,26 @@ const getPullRequestDetailDef = factory.query({
 			repositoryId: Schema.Number,
 			number: Schema.Number,
 			state: Schema.Literal("open", "closed"),
+			optimisticOperationType: Schema.NullOr(
+				Schema.Literal(
+					"update_issue_state",
+					"merge_pull_request",
+					"update_pull_request_branch",
+					"update_labels",
+					"update_assignees",
+				),
+			),
+			optimisticState: Schema.NullOr(
+				Schema.Literal("pending", "failed", "confirmed"),
+			),
+			optimisticErrorMessage: Schema.NullOr(Schema.String),
 			draft: Schema.Boolean,
 			title: Schema.String,
 			body: Schema.NullOr(Schema.String),
 			authorLogin: Schema.NullOr(Schema.String),
 			authorAvatarUrl: Schema.NullOr(Schema.String),
+			assignees: Schema.Array(AssigneeSchema),
+			labelNames: Schema.Array(Schema.String),
 			headRefName: Schema.String,
 			baseRefName: Schema.String,
 			headSha: Schema.String,
@@ -840,6 +917,8 @@ const enrichPr = (pr: {
 	readonly repositoryId: number;
 	readonly number: number;
 	readonly state: "open" | "closed";
+	readonly optimisticState?: "pending" | "failed" | "confirmed" | null;
+	readonly optimisticErrorMessage?: string | null;
 	readonly draft: boolean;
 	readonly title: string;
 	readonly authorUserId: number | null;
@@ -916,6 +995,8 @@ const enrichPr = (pr: {
 		return {
 			number: pr.number,
 			state: pr.state,
+			optimisticState: pr.optimisticState ?? null,
+			optimisticErrorMessage: pr.optimisticErrorMessage ?? null,
 			draft: pr.draft,
 			title: pr.title,
 			authorLogin: author.login,
@@ -968,6 +1049,8 @@ const enrichIssue = (issue: {
 	readonly repositoryId: number;
 	readonly number: number;
 	readonly state: "open" | "closed";
+	readonly optimisticState?: "pending" | "failed" | "confirmed" | null;
+	readonly optimisticErrorMessage?: string | null;
 	readonly title: string;
 	readonly authorUserId: number | null;
 	readonly labelNames: ReadonlyArray<string>;
@@ -979,6 +1062,8 @@ const enrichIssue = (issue: {
 		return {
 			number: issue.number,
 			state: issue.state,
+			optimisticState: issue.optimisticState ?? null,
+			optimisticErrorMessage: issue.optimisticErrorMessage ?? null,
 			title: issue.title,
 			authorLogin: author.login,
 			authorAvatarUrl: author.avatarUrl,
@@ -1058,6 +1143,87 @@ listActivityDef.implement((args) =>
 			entityNumber: a.entityNumber,
 			createdAt: a.createdAt,
 		}));
+	}),
+);
+
+// -- Search implementation ---------------------------------------------------
+
+searchIssuesAndPrsDef.implement((args) =>
+	Effect.gen(function* () {
+		const repositoryId = yield* findRepo(args.ownerLogin, args.name);
+		if (repositoryId === null) return [];
+
+		const ctx = yield* ConfectQueryCtx;
+		const maxResults = args.limit ?? 20;
+		const normalizedQuery = args.query.toLowerCase();
+
+		const prCandidates = yield* ctx.db
+			.query("github_pull_requests")
+			.withIndex("by_repositoryId_and_state_and_githubUpdatedAt")
+			.order("desc")
+			.take(200);
+		const prResults = prCandidates
+			.filter(
+				(pr) =>
+					pr.repositoryId === repositoryId &&
+					pr.title.toLowerCase().includes(normalizedQuery),
+			)
+			.slice(0, maxResults);
+
+		const issueCandidates = yield* ctx.db
+			.query("github_issues")
+			.withIndex("by_repositoryId_and_state_and_githubUpdatedAt")
+			.order("desc")
+			.take(200);
+		const issueResults = issueCandidates
+			.filter(
+				(issue) =>
+					issue.repositoryId === repositoryId &&
+					!issue.isPullRequest &&
+					issue.title.toLowerCase().includes(normalizedQuery),
+			)
+			.slice(0, maxResults);
+
+		// Resolve authors and merge
+		const prItems = yield* Effect.all(
+			prResults.map((pr) =>
+				Effect.gen(function* () {
+					const author = yield* resolveUser(pr.authorUserId);
+					return {
+						type: "pr" as const,
+						number: pr.number,
+						state: pr.state,
+						title: pr.title,
+						authorLogin: author.login,
+						githubUpdatedAt: pr.githubUpdatedAt,
+					};
+				}),
+			),
+			{ concurrency: "unbounded" },
+		);
+
+		const issueItems = yield* Effect.all(
+			issueResults.map((issue) =>
+				Effect.gen(function* () {
+					const author = yield* resolveUser(issue.authorUserId);
+					return {
+						type: "issue" as const,
+						number: issue.number,
+						state: issue.state,
+						title: issue.title,
+						authorLogin: author.login,
+						githubUpdatedAt: issue.githubUpdatedAt,
+					};
+				}),
+			),
+			{ concurrency: "unbounded" },
+		);
+
+		// Merge and sort by updatedAt descending
+		const merged = [...prItems, ...issueItems].sort(
+			(a, b) => b.githubUpdatedAt - a.githubUpdatedAt,
+		);
+		return merged.slice(0, maxResults);
 	}),
 );
 
@@ -1448,6 +1614,22 @@ getIssueDetailDef.implement((args) =>
 		// Resolve author
 		const author = yield* resolveUser(issue.authorUserId);
 
+		// Resolve assignees
+		const assignees = yield* Effect.all(
+			issue.assigneeUserIds.map((uid) =>
+				Effect.gen(function* () {
+					const u = yield* resolveUser(uid);
+					return u.login !== null
+						? { login: u.login, avatarUrl: u.avatarUrl }
+						: null;
+				}),
+			),
+			{ concurrency: "unbounded" },
+		);
+		const resolvedAssignees = assignees.filter(
+			(a): a is { login: string; avatarUrl: string | null } => a !== null,
+		);
+
 		// Get comments (bounded to 500 — practical limit for a single issue)
 		const rawComments = yield* ctx.db
 			.query("github_issue_comments")
@@ -1478,10 +1660,14 @@ getIssueDetailDef.implement((args) =>
 			repositoryId,
 			number: issue.number,
 			state: issue.state,
+			optimisticOperationType: issue.optimisticOperationType ?? null,
+			optimisticState: issue.optimisticState ?? null,
+			optimisticErrorMessage: issue.optimisticErrorMessage ?? null,
 			title: issue.title,
 			body: issue.body,
 			authorLogin: author.login,
 			authorAvatarUrl: author.avatarUrl,
+			assignees: resolvedAssignees,
 			labelNames: [...issue.labelNames],
 			commentCount: issue.commentCount,
 			closedAt: issue.closedAt,
@@ -1511,6 +1697,22 @@ getPullRequestDetailDef.implement((args) =>
 
 		// Resolve author
 		const author = yield* resolveUser(pr.authorUserId);
+
+		// Resolve assignees
+		const prAssignees = yield* Effect.all(
+			pr.assigneeUserIds.map((uid) =>
+				Effect.gen(function* () {
+					const u = yield* resolveUser(uid);
+					return u.login !== null
+						? { login: u.login, avatarUrl: u.avatarUrl }
+						: null;
+				}),
+			),
+			{ concurrency: "unbounded" },
+		);
+		const resolvedPrAssignees = prAssignees.filter(
+			(a): a is { login: string; avatarUrl: string | null } => a !== null,
+		);
 
 		// Get comments (bounded — a PR rarely has >500 comments)
 		const rawComments = yield* ctx.db
@@ -1555,6 +1757,8 @@ getPullRequestDetailDef.implement((args) =>
 						authorAvatarUrl: reviewAuthor.avatarUrl,
 						state: r.state,
 						submittedAt: r.submittedAt,
+						optimisticState: r.optimisticState ?? null,
+						optimisticErrorMessage: r.optimisticErrorMessage ?? null,
 					};
 				}),
 			),
@@ -1606,11 +1810,16 @@ getPullRequestDetailDef.implement((args) =>
 			repositoryId,
 			number: pr.number,
 			state: pr.state,
+			optimisticOperationType: pr.optimisticOperationType ?? null,
+			optimisticState: pr.optimisticState ?? null,
+			optimisticErrorMessage: pr.optimisticErrorMessage ?? null,
 			draft: pr.draft,
 			title: pr.title,
 			body: pr.body,
 			authorLogin: author.login,
 			authorAvatarUrl: author.avatarUrl,
+			assignees: resolvedPrAssignees,
+			labelNames: [...(pr.labelNames ?? [])],
 			headRefName: pr.headRefName,
 			baseRefName: pr.baseRefName,
 			headSha: pr.headSha,
@@ -2059,44 +2268,43 @@ getWorkflowRunDetailDef.implement((args) =>
 
 		const ctx = yield* ConfectQueryCtx;
 
-		// Find the workflow run by runNumber — scan through all runs for this repo
-		const allRuns = yield* ctx.db
+		const run = yield* ctx.db
 			.query("github_workflow_runs")
-			.withIndex("by_repositoryId_and_updatedAt", (q) =>
-				q.eq("repositoryId", repositoryId),
+			.withIndex("by_repositoryId_and_runNumber", (q) =>
+				q.eq("repositoryId", repositoryId).eq("runNumber", args.runNumber),
 			)
-			.collect();
-
-		const run = allRuns.find((r) => r.runNumber === args.runNumber);
-		if (!run) return null;
+			.first();
+		if (Option.isNone(run)) return null;
 
 		// Resolve actor
-		const actor = yield* resolveUser(run.actorUserId);
+		const actor = yield* resolveUser(run.value.actorUserId);
 
 		// Get jobs for this run
 		const jobs = yield* ctx.db
 			.query("github_workflow_jobs")
 			.withIndex("by_repositoryId_and_githubRunId", (q) =>
-				q.eq("repositoryId", repositoryId).eq("githubRunId", run.githubRunId),
+				q
+					.eq("repositoryId", repositoryId)
+					.eq("githubRunId", run.value.githubRunId),
 			)
 			.collect();
 
 		return {
 			repositoryId,
-			githubRunId: run.githubRunId,
-			workflowName: run.workflowName,
-			runNumber: run.runNumber,
-			runAttempt: run.runAttempt,
-			event: run.event,
-			status: run.status,
-			conclusion: run.conclusion,
-			headBranch: run.headBranch,
-			headSha: run.headSha,
+			githubRunId: run.value.githubRunId,
+			workflowName: run.value.workflowName,
+			runNumber: run.value.runNumber,
+			runAttempt: run.value.runAttempt,
+			event: run.value.event,
+			status: run.value.status,
+			conclusion: run.value.conclusion,
+			headBranch: run.value.headBranch,
+			headSha: run.value.headSha,
 			actorLogin: actor.login,
 			actorAvatarUrl: actor.avatarUrl,
-			htmlUrl: run.htmlUrl,
-			createdAt: run.createdAt,
-			updatedAt: run.updatedAt,
+			htmlUrl: run.value.htmlUrl,
+			createdAt: run.value.createdAt,
+			updatedAt: run.value.updatedAt,
 			jobs: jobs.map((j) => ({
 				githubJobId: j.githubJobId,
 				name: j.name,
@@ -2108,6 +2316,111 @@ getWorkflowRunDetailDef.implement((args) =>
 				stepsJson: j.stepsJson,
 			})),
 		};
+	}),
+);
+
+// ---------------------------------------------------------------------------
+// List distinct labels for a repository (aggregated from issues + PRs)
+// ---------------------------------------------------------------------------
+
+const listRepoLabelsDef = factory.query({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+	},
+	success: Schema.Array(Schema.String),
+});
+
+listRepoLabelsDef.implement((args) =>
+	Effect.gen(function* () {
+		const repositoryId = yield* findRepo(args.ownerLogin, args.name);
+		if (repositoryId === null) return [];
+
+		const ctx = yield* ConfectQueryCtx;
+		const labelSet = new Set<string>();
+
+		// Collect from issues
+		const issues = yield* ctx.db
+			.query("github_issues")
+			.withIndex("by_repositoryId_and_number", (q) =>
+				q.eq("repositoryId", repositoryId),
+			)
+			.collect();
+
+		for (const issue of issues) {
+			for (const label of issue.labelNames) {
+				labelSet.add(label);
+			}
+		}
+
+		// Collect from PRs
+		const prs = yield* ctx.db
+			.query("github_pull_requests")
+			.withIndex("by_repositoryId_and_number", (q) =>
+				q.eq("repositoryId", repositoryId),
+			)
+			.collect();
+
+		for (const pr of prs) {
+			if (pr.labelNames) {
+				for (const label of pr.labelNames) {
+					labelSet.add(label);
+				}
+			}
+		}
+
+		return [...labelSet].sort();
+	}),
+);
+
+// ---------------------------------------------------------------------------
+// List assignable users for a repository (from synced permissions)
+// ---------------------------------------------------------------------------
+
+const RepoCollaboratorSchema = Schema.Struct({
+	login: Schema.String,
+	avatarUrl: Schema.NullOr(Schema.String),
+});
+
+const listRepoAssigneesDef = factory.query({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+	},
+	success: Schema.Array(RepoCollaboratorSchema),
+});
+
+listRepoAssigneesDef.implement((args) =>
+	Effect.gen(function* () {
+		const repositoryId = yield* findRepo(args.ownerLogin, args.name);
+		if (repositoryId === null) return [];
+
+		const ctx = yield* ConfectQueryCtx;
+
+		// Get all users with permissions on this repo
+		const permissions = yield* ctx.db
+			.query("github_user_repo_permissions")
+			.withIndex("by_repositoryId", (q) => q.eq("repositoryId", repositoryId))
+			.collect();
+
+		// Resolve each to login/avatar
+		const collaborators = yield* Effect.all(
+			permissions.map((perm) =>
+				Effect.gen(function* () {
+					const user = yield* resolveUser(perm.githubUserId);
+					return user.login !== null
+						? { login: user.login, avatarUrl: user.avatarUrl }
+						: null;
+				}),
+			),
+			{ concurrency: "unbounded" },
+		);
+
+		return collaborators
+			.filter(
+				(c): c is { login: string; avatarUrl: string | null } => c !== null,
+			)
+			.sort((a, b) => a.login.localeCompare(b.login));
 	}),
 );
 
@@ -2134,6 +2447,9 @@ const projectionQueriesModule = makeRpcModule(
 		listPrFiles: listPrFilesDef,
 		requestPrFileSync: requestPrFileSyncDef,
 		getHomeDashboard: getHomeDashboardDef,
+		searchIssuesAndPrs: searchIssuesAndPrsDef,
+		listRepoLabels: listRepoLabelsDef,
+		listRepoAssignees: listRepoAssigneesDef,
 	},
 	{ middlewares: DatabaseRpcTelemetryLayer },
 );
@@ -2156,6 +2472,9 @@ export const {
 	listPrFiles,
 	requestPrFileSync,
 	getHomeDashboard,
+	searchIssuesAndPrs,
+	listRepoLabels,
+	listRepoAssignees,
 } = projectionQueriesModule.handlers;
 export { projectionQueriesModule };
 export type ProjectionQueriesModule = typeof projectionQueriesModule;

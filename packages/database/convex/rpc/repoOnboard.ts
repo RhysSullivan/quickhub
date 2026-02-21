@@ -20,11 +20,7 @@ import {
 	ConfectQueryCtx,
 	confectSchema,
 } from "../confect";
-import {
-	GitHubApiClient,
-	GitHubApiError,
-	GitHubRateLimitError,
-} from "../shared/githubApi";
+import { GitHubApiClient } from "../shared/githubApi";
 import {
 	lookupGitHubTokenByUserIdConfect,
 	NoGitHubTokenError,
@@ -370,43 +366,24 @@ addRepoByUrlDef.implement((args) =>
 				reason: "Could not extract owner/name from input",
 			});
 		}
+		const [ownerFromUrl, repoFromUrl] = fullName.split("/");
 
 		// 2. Fetch repo metadata from GitHub API
-		const repoData = yield* gh
-			.use(async (fetch) => {
-				const res = await fetch(`/repos/${fullName}`);
-				if (res.status === 404) {
-					return null;
-				}
-				if (!res.ok) {
-					throw new GitHubApiError({
-						status: res.status,
-						message: await res.text(),
-						url: res.url,
-					});
-				}
-				return (await res.json()) as Record<string, unknown>;
-			})
-			.pipe(
-				Effect.catchTags({
-					GitHubApiError: () => Effect.succeed(null),
-					GitHubRateLimitError: () => Effect.succeed(null),
-				}),
-			);
+		// reposGet returns FullRepository | BasicError. Narrow via "id" (only on FullRepository).
+		const repoResult = yield* gh.client
+			.reposGet(ownerFromUrl ?? "", repoFromUrl ?? "")
+			.pipe(Effect.catchAll(() => Effect.succeed(null)));
 
-		if (repoData === null) {
+		if (repoResult === null || !("id" in repoResult)) {
 			return yield* new RepoNotFound({ fullName });
 		}
-
-		const githubRepoId = num(repoData.id);
-		if (githubRepoId === null) {
-			return yield* new RepoNotFound({ fullName });
-		}
+		// After this point TypeScript knows repoResult is FullRepository
+		const repo = repoResult;
 
 		// 3. Check if already connected
 		const connected = yield* ctx.runQuery(
 			internal.rpc.repoOnboard.isRepoConnected,
-			{ githubRepoId },
+			{ githubRepoId: repo.id },
 		);
 
 		if (connected) {
@@ -414,29 +391,26 @@ addRepoByUrlDef.implement((args) =>
 		}
 
 		// 4. Extract repo metadata
-		const owner = repoData.owner as Record<string, unknown> | null;
-		const ownerId = num(owner?.id) ?? 0;
-		const ownerLogin = str(owner?.login) ?? fullName.split("/")[0] ?? "";
-		const ownerTypeRaw = str(owner?.type);
+		const githubRepoId = repo.id;
+		const ownerId = repo.owner.id;
+		const ownerLogin = repo.owner.login;
 		const ownerType: "User" | "Organization" =
-			ownerTypeRaw === "Organization" ? "Organization" : "User";
-		const name = str(repoData.name) ?? fullName.split("/")[1] ?? "";
-		const defaultBranch = str(repoData.default_branch) ?? "main";
-		const isPrivate = bool(repoData.private);
+			repo.owner.type === "Organization" ? "Organization" : "User";
+		const name = repo.name;
+		const defaultBranch = repo.default_branch;
+		const isPrivate = repo.private;
 		const visibility = isPrivate ? "private" : "public";
 
 		// 5. Check if we have admin access (to set up webhooks)
-		// The "permissions" field is only present when using a token that has access
-		const permissions = repoData.permissions as
-			| Record<string, boolean>
-			| undefined;
+		const permissions = repo.permissions;
 		const hasAdmin = permissions?.admin === true;
 		const permissionPull = permissions?.pull === true;
 		const permissionTriage = permissions?.triage === true;
 		const permissionPush = permissions?.push === true;
 		const permissionMaintain = permissions?.maintain === true;
 		const permissionAdmin = permissions?.admin === true;
-		const permissionRoleName = str(repoData.role_name);
+		// role_name is not available on FullRepository (only on Repository list type)
+		const permissionRoleName: string | null = null;
 
 		let webhookCreated = false;
 
@@ -448,63 +422,57 @@ addRepoByUrlDef.implement((args) =>
 			if (webhookSecret && convexSiteUrl) {
 				const webhookUrl = `${convexSiteUrl}/api/github/webhook`;
 
-				const setupResult = yield* gh
-					.use(async (fetch) => {
-						const res = await fetch(`/repos/${fullName}/hooks`, {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({
-								name: "web",
-								active: true,
-								events: [
-									"push",
-									"pull_request",
-									"pull_request_review",
-									"issues",
-									"issue_comment",
-									"check_run",
-									"create",
-									"delete",
-									"workflow_run",
-									"workflow_job",
-								],
-								config: {
-									url: webhookUrl,
-									content_type: "json",
-									secret: webhookSecret,
-									insecure_ssl: "0",
-								},
-							}),
-						});
-
-						if (!res.ok) {
-							const body = await res.text();
-							// 422 means webhook already exists — that's OK
-							if (res.status === 422 && body.includes("already exists")) {
-								return { created: false, alreadyExists: true };
-							}
-							return {
-								created: false,
-								alreadyExists: false,
-								error: `${res.status}: ${body}`,
-							};
-						}
-						return { created: true, alreadyExists: false };
+				const setupResult = yield* gh.client
+					.reposCreateWebhook(ownerLogin, name, {
+						payload: {
+							name: "web",
+							active: true,
+							events: [
+								"push",
+								"pull_request",
+								"pull_request_review",
+								"issues",
+								"issue_comment",
+								"check_run",
+								"create",
+								"delete",
+								"workflow_run",
+								"workflow_job",
+							],
+							config: {
+								url: webhookUrl,
+								content_type: "json",
+								secret: webhookSecret,
+								insecure_ssl: "0",
+							},
+						},
 					})
 					.pipe(
-						Effect.catchTags({
-							GitHubApiError: (e) =>
-								Effect.succeed({
-									created: false,
-									alreadyExists: false,
-									error: e.message,
-								}),
-							GitHubRateLimitError: (e) =>
-								Effect.succeed({
-									created: false,
-									alreadyExists: false,
-									error: `Rate limited: ${e.message}`,
-								}),
+						Effect.map(() => ({ created: true, alreadyExists: false })),
+						Effect.catchAll((error) => {
+							if (
+								typeof error === "object" &&
+								error !== null &&
+								"_tag" in error &&
+								error._tag === "ValidationError" &&
+								"cause" in error &&
+								typeof error.cause === "object" &&
+								error.cause !== null &&
+								"message" in error.cause &&
+								typeof error.cause.message === "string"
+							) {
+								if (error.cause.message.includes("already exists")) {
+									return Effect.succeed({
+										created: false,
+										alreadyExists: true,
+									});
+								}
+							}
+							return Effect.succeed({
+								created: false,
+								alreadyExists: false,
+								error: String(error),
+							});
 						}),
 					);
 

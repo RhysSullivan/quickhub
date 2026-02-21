@@ -1,3 +1,4 @@
+import * as HttpClientRequest from "@effect/platform/HttpClientRequest";
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
 import { Effect, Either, Option, Schema } from "effect";
 import { components, internal } from "../_generated/api";
@@ -7,7 +8,7 @@ import {
 	ConfectQueryCtx,
 	confectSchema,
 } from "../confect";
-import { GitHubApiClient, GitHubApiError } from "../shared/githubApi";
+import { GitHubApiClient } from "../shared/githubApi";
 import { getInstallationToken } from "../shared/githubApp";
 import { lookupGitHubTokenByUserIdConfect } from "../shared/githubToken";
 import { DatabaseRpcTelemetryLayer } from "./telemetry";
@@ -32,6 +33,12 @@ const MAX_PATCH_BYTES = 100_000;
  * Convex mutation size limits.
  */
 const MAX_FILES_PER_PR = 300;
+
+/**
+ * Maximum number of log characters returned to the client.
+ * We return the tail so users see the latest failure details first.
+ */
+const MAX_JOB_LOG_CHARS = 200_000;
 
 /** Sync users whose permissions are older than 6 hours. */
 const PERMISSION_STALE_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -60,12 +67,6 @@ const SyncPermissionsResultSchema = Schema.Struct({
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-const parseNextLink = (linkHeader: string | null): string | null => {
-	if (!linkHeader) return null;
-	const matches = linkHeader.match(/<([^>]+)>;\s*rel="next"/);
-	return matches?.[1] ?? null;
-};
 
 const PR_FILE_STATUS = [
 	"added",
@@ -138,6 +139,26 @@ const fetchPrDiffDef = factory.action({
 		number: Schema.Number,
 	},
 	success: Schema.NullOr(Schema.String),
+});
+
+/**
+ * Fetch workflow job logs on demand from GitHub.
+ *
+ * Uses the signed-in user's OAuth token and returns log text directly.
+ * Returns null when logs are unavailable or the user cannot access them.
+ */
+const fetchWorkflowJobLogsDef = factory.action({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		jobId: Schema.Number,
+	},
+	success: Schema.NullOr(
+		Schema.Struct({
+			log: Schema.String,
+			truncated: Schema.Boolean,
+		}),
+	),
 });
 
 /**
@@ -347,36 +368,28 @@ const syncPermissionsForUser = (userId: string) =>
 			Schema.Schema.Type<typeof RepoPermissionItemSchema>
 		> = [];
 
-		yield* gh.use(async (fetch) => {
-			let url: string | null =
-				"/user/repos?per_page=100&affiliation=owner,collaborator,organization_member";
+		let page = 1;
+		let hasMore = true;
+		while (hasMore) {
+			const repos = yield* gh.client.reposListForAuthenticatedUser({
+				per_page: 100,
+				page,
+				affiliation: "owner,collaborator,organization_member",
+			});
 
-			while (url) {
-				const res = await fetch(url);
-				if (!res.ok) {
-					throw new GitHubApiError({
-						status: res.status,
-						message: await res.text(),
-						url: res.url,
-					});
+			for (const rawRepo of repos) {
+				const permission = toRepoPermissionItem(rawRepo);
+				if (
+					permission !== null &&
+					connectedRepoIdSet.has(permission.repositoryId)
+				) {
+					repoPermissions.push(permission);
 				}
-
-				const page = await res.json();
-				if (Array.isArray(page)) {
-					for (const rawRepo of page) {
-						const permission = toRepoPermissionItem(rawRepo);
-						if (
-							permission !== null &&
-							connectedRepoIdSet.has(permission.repositoryId)
-						) {
-							repoPermissions.push(permission);
-						}
-					}
-				}
-
-				url = parseNextLink(res.headers.get("link"));
 			}
-		});
+
+			hasMore = repos.length === 100;
+			page += 1;
+		}
 
 		const persist = yield* ctx.runMutation(
 			internal.rpc.githubActions.upsertUserRepoPermissions,
@@ -591,22 +604,69 @@ fetchPrDiffDef.implement((args) =>
 			GitHubApiClient.fromToken(token),
 		);
 
-		const diff = yield* github.use(async (fetch) => {
-			const res = await fetch(
+		const request = HttpClientRequest.setHeader(
+			HttpClientRequest.get(
 				`/repos/${args.ownerLogin}/${args.name}/pulls/${args.number}`,
-				{
-					headers: { Accept: "application/vnd.github.diff" },
-				},
+			),
+			"accept",
+			"application/vnd.github.diff",
+		);
+		const response = yield* github.httpClient.execute(request);
+		if (response.status === 404) return null;
+		if (response.status < 200 || response.status >= 300) {
+			const errorBody = yield* Effect.orElseSucceed(response.text, () => "");
+			return yield* Effect.fail(
+				new Error(`GitHub API returned ${response.status}: ${errorBody}`),
 			);
-			if (res.status === 404) return null;
-			if (!res.ok) {
-				throw new Error(
-					`GitHub API returned ${res.status}: ${await res.text()}`,
-				);
-			}
-			return res.text();
-		});
+		}
+		const diff = yield* response.text;
 		return diff;
+	}).pipe(Effect.catchAll(() => Effect.succeed(null))),
+);
+
+fetchWorkflowJobLogsDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectActionCtx;
+		const identity = yield* ctx.auth.getUserIdentity();
+		if (Option.isNone(identity)) return null;
+
+		const token = yield* lookupGitHubTokenByUserIdConfect(
+			ctx.runQuery,
+			identity.value.subject,
+		);
+		const github = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(token),
+		);
+
+		const response = yield* github.httpClient.execute(
+			HttpClientRequest.get(
+				`/repos/${args.ownerLogin}/${args.name}/actions/jobs/${args.jobId}/logs`,
+			),
+		);
+
+		if (response.status === 404) return null;
+		if (response.status < 200 || response.status >= 300) {
+			const errorBody = yield* Effect.orElseSucceed(response.text, () => "");
+			return yield* Effect.fail(
+				new Error(`GitHub API returned ${response.status}: ${errorBody}`),
+			);
+		}
+
+		const text = yield* response.text;
+		if (text.trim() === "") return null;
+
+		if (text.length <= MAX_JOB_LOG_CHARS) {
+			return {
+				log: text,
+				truncated: false,
+			};
+		}
+
+		return {
+			log: text.slice(-MAX_JOB_LOG_CHARS),
+			truncated: true,
+		};
 	}).pipe(Effect.catchAll(() => Effect.succeed(null))),
 );
 
@@ -632,29 +692,43 @@ syncPrFilesDef.implement((args) =>
 		);
 
 		// Paginated fetch of PR files
-		const allFiles: Array<Record<string, unknown>> = [];
+		const allFiles: Array<{
+			filename: string;
+			status: string;
+			additions: number;
+			deletions: number;
+			changes: number;
+			patch?: string | null;
+			previous_filename?: string | null;
+		}> = [];
 		let truncatedPatches = 0;
 
-		yield* gh.use(async (fetch) => {
-			let url: string | null =
-				`/repos/${args.ownerLogin}/${args.name}/pulls/${args.pullRequestNumber}/files?per_page=100`;
-
-			while (url && allFiles.length < MAX_FILES_PER_PR) {
-				const res = await fetch(url);
-				if (res.status === 404) return;
-				if (!res.ok) {
-					throw new GitHubApiError({
-						status: res.status,
-						message: await res.text(),
-						url: res.url,
-					});
-				}
-
-				const page = (await res.json()) as Array<Record<string, unknown>>;
-				allFiles.push(...page);
-				url = parseNextLink(res.headers.get("link"));
+		let page = 1;
+		let hasMore = true;
+		while (hasMore && allFiles.length < MAX_FILES_PER_PR) {
+			const filesPage = yield* gh.client.pullsListFiles(
+				args.ownerLogin,
+				args.name,
+				String(args.pullRequestNumber),
+				{
+					per_page: 100,
+					page,
+				},
+			);
+			for (const file of filesPage) {
+				allFiles.push({
+					filename: file.filename,
+					status: file.status,
+					additions: file.additions,
+					deletions: file.deletions,
+					changes: file.changes,
+					patch: file.patch,
+					previous_filename: file.previous_filename,
+				});
 			}
-		});
+			hasMore = filesPage.length === 100;
+			page += 1;
+		}
 
 		// Map to storage format with patch truncation
 		const files = allFiles.slice(0, MAX_FILES_PER_PR).map((f) => {
@@ -755,6 +829,7 @@ const githubActionsModule = makeRpcModule(
 		listStalePermissionUserIds: listStalePermissionUserIdsDef,
 		upsertUserRepoPermissions: upsertUserRepoPermissionsDef,
 		fetchPrDiff: fetchPrDiffDef,
+		fetchWorkflowJobLogs: fetchWorkflowJobLogsDef,
 		syncPrFiles: syncPrFilesDef,
 		upsertPrFiles: upsertPrFilesDef,
 	},
@@ -769,6 +844,7 @@ export const {
 	listStalePermissionUserIds,
 	upsertUserRepoPermissions,
 	fetchPrDiff,
+	fetchWorkflowJobLogs,
 	syncPrFiles,
 	upsertPrFiles,
 } = githubActionsModule.handlers;
