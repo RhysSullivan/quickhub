@@ -549,7 +549,7 @@ getRepoInfoDef.implement((args) =>
 			repositoryId: repo.githubRepoId,
 			connectedByUserId: repo.connectedByUserId ?? null,
 			installationId: repo.installationId,
-			isPrivate: repo.visibility === "public" ? false : repo.private,
+			isPrivate: !(repo.visibility === "public" && repo.private === false),
 		};
 	}),
 );
@@ -571,8 +571,9 @@ getRepoInfoByIdDef.implement((args) =>
 			ownerLogin: repo.value.ownerLogin,
 			name: repo.value.name,
 			installationId: repo.value.installationId,
-			isPrivate:
-				repo.value.visibility === "public" ? false : repo.value.private,
+			isPrivate: !(
+				repo.value.visibility === "public" && repo.value.private === false
+			),
 		};
 	}),
 );
