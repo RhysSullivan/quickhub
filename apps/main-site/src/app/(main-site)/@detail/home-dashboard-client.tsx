@@ -2,27 +2,153 @@
 
 import { Result, useAtomValue } from "@effect-atom/atom-react";
 import { useSubscriptionWithInitial } from "@packages/confect/rpc";
-import {
-	Avatar,
-	AvatarFallback,
-	AvatarImage,
-} from "@packages/ui/components/avatar";
+import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
 import {
-	Activity,
-	Eye,
+	Command,
+	CommandEmpty,
+	CommandGroup,
+	CommandInput,
+	CommandItem,
+	CommandList,
+} from "@packages/ui/components/command";
+import {
+	AlertCircle,
+	CircleDot,
 	GitBranch,
 	GitPullRequest,
 	MessageCircle,
-	User,
 } from "@packages/ui/components/icons";
 import { Link } from "@packages/ui/components/link";
+import { ScrollArea } from "@packages/ui/components/scroll-area";
 import { Skeleton } from "@packages/ui/components/skeleton";
 import { GitHubIcon } from "@packages/ui/icons/index";
 import { authClient } from "@packages/ui/lib/auth-client";
 import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
-import { type ReactNode, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import type { ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+type DashboardPrItem = {
+	ownerLogin: string;
+	repoName: string;
+	number: number;
+	state: "open" | "closed";
+	draft: boolean;
+	title: string;
+	authorLogin: string | null;
+	authorAvatarUrl: string | null;
+	commentCount: number;
+	lastCheckConclusion: string | null;
+	failingCheckNames: readonly string[];
+	githubUpdatedAt: number;
+};
+
+type DashboardIssueItem = {
+	ownerLogin: string;
+	repoName: string;
+	number: number;
+	state: "open" | "closed";
+	title: string;
+	authorLogin: string | null;
+	authorAvatarUrl: string | null;
+	labelNames: readonly string[];
+	commentCount: number;
+	githubUpdatedAt: number;
+};
+
+type RepoSummary = {
+	ownerLogin: string;
+	name: string;
+	fullName: string;
+	openPrCount: number;
+	openIssueCount: number;
+	failingCheckCount: number;
+	lastPushAt: number | null;
+};
+
+export type DashboardData = {
+	scope: "org" | "personal";
+	rangeDays: number;
+	ownerFilter: string | null;
+	repoFilter: string | null;
+	githubLogin: string | null;
+	availableOwners: ReadonlyArray<{ ownerLogin: string; repoCount: number }>;
+	availableRepos: ReadonlyArray<{
+		ownerLogin: string;
+		name: string;
+		fullName: string;
+	}>;
+	summary: {
+		repoCount: number;
+		openPrCount: number;
+		openIssueCount: number;
+		failingCheckCount: number;
+		attentionCount: number;
+		reviewQueueCount: number;
+		stalePrCount: number;
+	};
+	yourPrs: ReadonlyArray<DashboardPrItem>;
+	needsAttentionPrs: ReadonlyArray<DashboardPrItem>;
+	recentPrs: ReadonlyArray<DashboardPrItem>;
+	recentIssues: ReadonlyArray<DashboardIssueItem>;
+	portfolioPrs: ReadonlyArray<
+		DashboardPrItem & {
+			assigneeCount: number;
+			requestedReviewerCount: number;
+			attentionLevel: "critical" | "high" | "normal";
+			attentionReason: string;
+			isViewerAuthor: boolean;
+			isViewerReviewer: boolean;
+			isViewerAssignee: boolean;
+			isStale: boolean;
+		}
+	>;
+	recentActivity: ReadonlyArray<{
+		ownerLogin: string;
+		repoName: string;
+		activityType: string;
+		title: string;
+		description: string | null;
+		actorLogin: string | null;
+		actorAvatarUrl: string | null;
+		entityNumber: number | null;
+		createdAt: number;
+	}>;
+	throughput: ReadonlyArray<{
+		dayStart: number;
+		dayLabel: string;
+		closedPrCount: number;
+		closedIssueCount: number;
+		pushCount: number;
+	}>;
+	workloadByOwner: ReadonlyArray<{
+		ownerLogin: string;
+		openPrCount: number;
+		reviewRequestedCount: number;
+		failingPrCount: number;
+		stalePrCount: number;
+	}>;
+	blockedItems: ReadonlyArray<{
+		type: "ci_failure" | "stale_pr" | "review_queue";
+		ownerLogin: string;
+		repoName: string;
+		number: number;
+		title: string;
+		reason: string;
+		githubUpdatedAt: number;
+	}>;
+	repos: ReadonlyArray<RepoSummary>;
+};
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function formatRelative(timestamp: number): string {
 	const diff = Math.floor((Date.now() - timestamp) / 1000);
@@ -37,110 +163,177 @@ function formatRelative(timestamp: number): string {
 	});
 }
 
-const EmptyPayload: Record<string, never> = {};
+// ---------------------------------------------------------------------------
+// Inline Command Palette
+// ---------------------------------------------------------------------------
 
-type DashboardPrItem = {
-	ownerLogin: string;
-	repoName: string;
-	number: number;
-	state: "open" | "closed";
-	draft: boolean;
-	title: string;
-	authorLogin: string | null;
-	authorAvatarUrl: string | null;
-	commentCount: number;
-	lastCheckConclusion: string | null;
-	githubUpdatedAt: number;
-};
-
-type ActivityItem = {
-	ownerLogin: string;
-	repoName: string;
-	activityType: string;
-	title: string;
-	description: string | null;
-	actorLogin: string | null;
-	actorAvatarUrl: string | null;
-	entityNumber: number | null;
-	createdAt: number;
-};
-
-type RepoSummary = {
-	ownerLogin: string;
-	name: string;
-	fullName: string;
-	openPrCount: number;
-	openIssueCount: number;
-	failingCheckCount: number;
-	lastPushAt: number | null;
-};
-
-export type DashboardData = {
-	githubLogin: string | null;
-	yourPrs: ReadonlyArray<DashboardPrItem>;
-	needsAttentionPrs: ReadonlyArray<DashboardPrItem>;
-	recentPrs: ReadonlyArray<DashboardPrItem>;
-	recentActivity: ReadonlyArray<ActivityItem>;
+function DashboardCommandPalette({
+	repos,
+	prs,
+	issues,
+}: {
 	repos: ReadonlyArray<RepoSummary>;
-};
+	prs: ReadonlyArray<DashboardPrItem>;
+	issues: ReadonlyArray<DashboardIssueItem>;
+}) {
+	const [query, setQuery] = useState("");
+	const router = useRouter();
+	const inputRef = useRef<HTMLInputElement>(null);
 
-type AttentionItem = {
-	id: string;
-	path: string;
-	repoLabel: string;
-	title: string;
-	number: number;
-	reason: string;
-	source: "review" | "owned";
-	githubUpdatedAt: number;
-	hasFailingChecks: boolean;
-};
+	// Auto-focus on mount
+	useEffect(() => {
+		const timeout = setTimeout(() => {
+			inputRef.current?.focus();
+		}, 100);
+		return () => clearTimeout(timeout);
+	}, []);
 
-type AttentionScope = "all" | "reviews" | "yours";
+	const normalizedQuery = query.trim().toLowerCase();
 
-function buildAttentionQueue(data: DashboardData): Array<AttentionItem> {
-	const next = new Map<string, AttentionItem>();
+	const filteredRepos = useMemo(() => {
+		if (normalizedQuery.length === 0) return [];
+		return repos
+			.filter(
+				(repo) =>
+					repo.fullName.toLowerCase().includes(normalizedQuery) ||
+					repo.name.toLowerCase().includes(normalizedQuery),
+			)
+			.slice(0, 5);
+	}, [repos, normalizedQuery]);
 
-	// PRs where you're a requested reviewer / assignee — highest priority
-	for (const pr of data.needsAttentionPrs) {
-		const id = `${pr.ownerLogin}/${pr.repoName}#${pr.number}`;
-		next.set(id, {
-			id,
-			path: `/${pr.ownerLogin}/${pr.repoName}/pulls/${pr.number}`,
-			repoLabel: `${pr.ownerLogin}/${pr.repoName}`,
-			title: pr.title,
-			number: pr.number,
-			reason: "Review requested",
-			source: "review",
-			githubUpdatedAt: pr.githubUpdatedAt,
-			hasFailingChecks: pr.lastCheckConclusion === "failure",
-		});
-	}
+	const filteredPrs = useMemo(() => {
+		if (normalizedQuery.length === 0) return [];
+		return prs
+			.filter(
+				(pr) =>
+					pr.title.toLowerCase().includes(normalizedQuery) ||
+					String(pr.number).includes(normalizedQuery) ||
+					(pr.authorLogin?.toLowerCase().includes(normalizedQuery) ?? false),
+			)
+			.slice(0, 5);
+	}, [prs, normalizedQuery]);
 
-	// Your own PRs — show them so you can track progress
-	for (const pr of data.yourPrs) {
-		const id = `${pr.ownerLogin}/${pr.repoName}#${pr.number}`;
-		if (next.has(id)) continue; // already in as a review item
-		const hasFailingChecks = pr.lastCheckConclusion === "failure";
-		next.set(id, {
-			id,
-			path: `/${pr.ownerLogin}/${pr.repoName}/pulls/${pr.number}`,
-			repoLabel: `${pr.ownerLogin}/${pr.repoName}`,
-			title: pr.title,
-			number: pr.number,
-			reason: hasFailingChecks ? "CI failing" : "Your PR",
-			source: "owned",
-			githubUpdatedAt: pr.githubUpdatedAt,
-			hasFailingChecks,
-		});
-	}
+	const filteredIssues = useMemo(() => {
+		if (normalizedQuery.length === 0) return [];
+		return issues
+			.filter(
+				(issue) =>
+					issue.title.toLowerCase().includes(normalizedQuery) ||
+					String(issue.number).includes(normalizedQuery) ||
+					(issue.authorLogin?.toLowerCase().includes(normalizedQuery) ??
+						false) ||
+					issue.labelNames.some((label) =>
+						label.toLowerCase().includes(normalizedQuery),
+					),
+			)
+			.slice(0, 5);
+	}, [issues, normalizedQuery]);
 
-	// Sort: reviews first, then by most recently updated
-	return [...next.values()].sort((a, b) => {
-		if (a.source !== b.source) return a.source === "review" ? -1 : 1;
-		return b.githubUpdatedAt - a.githubUpdatedAt;
-	});
+	const hasResults =
+		filteredRepos.length > 0 ||
+		filteredPrs.length > 0 ||
+		filteredIssues.length > 0;
+
+	const handleSelect = useCallback(
+		(path: string) => {
+			setQuery("");
+			router.push(path);
+		},
+		[router],
+	);
+
+	return (
+		<Command
+			shouldFilter={false}
+			className="rounded-lg border border-border/60 bg-card/60 shadow-sm backdrop-blur-sm"
+		>
+			<CommandInput
+				ref={inputRef}
+				placeholder="Jump to a repository, pull request, or issue..."
+				value={query}
+				onValueChange={setQuery}
+			/>
+			{normalizedQuery.length > 0 && (
+				<CommandList className="max-h-[260px]">
+					{!hasResults && (
+						<CommandEmpty>No results for &ldquo;{query}&rdquo;</CommandEmpty>
+					)}
+					{filteredRepos.length > 0 && (
+						<CommandGroup heading="Repositories">
+							{filteredRepos.map((repo) => (
+								<CommandItem
+									key={repo.fullName}
+									value={repo.fullName}
+									onSelect={() =>
+										handleSelect(`/${repo.ownerLogin}/${repo.name}/pulls`)
+									}
+								>
+									<GitBranch className="size-3.5 text-muted-foreground" />
+									<span className="flex-1 truncate text-sm">
+										{repo.fullName}
+									</span>
+									<span className="font-mono text-[10px] text-muted-foreground/60">
+										{repo.openPrCount} PRs &middot; {repo.openIssueCount} issues
+									</span>
+								</CommandItem>
+							))}
+						</CommandGroup>
+					)}
+					{filteredPrs.length > 0 && (
+						<CommandGroup heading="Pull Requests">
+							{filteredPrs.map((pr) => (
+								<CommandItem
+									key={`${pr.ownerLogin}/${pr.repoName}#${pr.number}`}
+									value={`pr-${pr.ownerLogin}/${pr.repoName}#${pr.number}`}
+									onSelect={() =>
+										handleSelect(
+											`/${pr.ownerLogin}/${pr.repoName}/pulls/${pr.number}`,
+										)
+									}
+								>
+									<GitPullRequest className="size-3.5 text-status-open" />
+									<div className="min-w-0 flex-1">
+										<span className="truncate text-sm">{pr.title}</span>
+										<span className="ml-2 font-mono text-[10px] text-muted-foreground/60">
+											{pr.ownerLogin}/{pr.repoName} #{pr.number}
+										</span>
+									</div>
+								</CommandItem>
+							))}
+						</CommandGroup>
+					)}
+					{filteredIssues.length > 0 && (
+						<CommandGroup heading="Issues">
+							{filteredIssues.map((issue) => (
+								<CommandItem
+									key={`${issue.ownerLogin}/${issue.repoName}#${issue.number}`}
+									value={`issue-${issue.ownerLogin}/${issue.repoName}#${issue.number}`}
+									onSelect={() =>
+										handleSelect(
+											`/${issue.ownerLogin}/${issue.repoName}/issues/${issue.number}`,
+										)
+									}
+								>
+									<CircleDot className="size-3.5 text-status-open" />
+									<div className="min-w-0 flex-1">
+										<span className="truncate text-sm">{issue.title}</span>
+										<span className="ml-2 font-mono text-[10px] text-muted-foreground/60">
+											{issue.ownerLogin}/{issue.repoName} #{issue.number}
+										</span>
+									</div>
+								</CommandItem>
+							))}
+						</CommandGroup>
+					)}
+				</CommandList>
+			)}
+		</Command>
+	);
 }
+
+// ---------------------------------------------------------------------------
+// Main Dashboard
+// ---------------------------------------------------------------------------
 
 export function HomeDashboard({
 	initialDashboard,
@@ -149,89 +342,50 @@ export function HomeDashboard({
 }) {
 	const session = authClient.useSession();
 	const client = useProjectionQueries();
+
 	const dashboardAtom = useMemo(
-		() => client.getHomeDashboard.subscription(EmptyPayload),
+		() => client.getHomeDashboard.subscription({}),
 		[client],
 	);
 	const dashboardResult = useAtomValue(dashboardAtom);
 	const data = useSubscriptionWithInitial(dashboardAtom, initialDashboard);
-	const [attentionScope, setAttentionScope] = useState<AttentionScope>("all");
 
 	if (session.isPending || Result.isInitial(dashboardResult)) {
 		return <DashboardSkeleton />;
 	}
 
 	const isSignedIn = session.data !== null;
-	const attentionQueue = buildAttentionQueue(data);
-	const filteredQueue =
-		attentionScope === "reviews"
-			? attentionQueue.filter((item) => item.source === "review")
-			: attentionScope === "yours"
-				? attentionQueue.filter((item) => item.source === "owned")
-				: attentionQueue;
 
-	const reviewCount = attentionQueue.filter(
-		(i) => i.source === "review",
-	).length;
-	const yourPrCount = data.yourPrs.length;
-	const yourFailingCount = data.yourPrs.filter(
-		(pr) => pr.lastCheckConclusion === "failure",
-	).length;
-
-	// Build a contextual summary — what's fresh for *you*
-	const summaryParts: Array<string> = [];
-	if (reviewCount > 0) {
-		summaryParts.push(
-			`${reviewCount} PR${reviewCount === 1 ? "" : "s"} waiting for your review`,
-		);
+	// Merge all PR sources for the column, deduped
+	const allPrsSeen = new Set<string>();
+	const allPrs: Array<DashboardPrItem> = [];
+	for (const pr of [
+		...data.yourPrs,
+		...data.needsAttentionPrs,
+		...data.recentPrs,
+	]) {
+		const key = `${pr.ownerLogin}/${pr.repoName}#${pr.number}`;
+		if (allPrsSeen.has(key)) continue;
+		allPrsSeen.add(key);
+		allPrs.push(pr);
 	}
-	if (yourFailingCount > 0) {
-		summaryParts.push(
-			`${yourFailingCount} of your PR${yourFailingCount === 1 ? "" : "s"} failing CI`,
-		);
-	} else if (yourPrCount > 0) {
-		summaryParts.push(
-			`${yourPrCount} open PR${yourPrCount === 1 ? "" : "s"} by you`,
-		);
-	}
-	const summaryText =
-		summaryParts.length > 0
-			? summaryParts.join(" · ")
-			: isSignedIn
-				? "All clear — nothing needs your attention"
-				: "Sign in to see what needs your attention";
+	allPrs.sort((a, b) => b.githubUpdatedAt - a.githubUpdatedAt);
 
 	return (
 		<div className="h-full overflow-y-auto bg-dotgrid">
-			<div className="px-4 py-5 md:px-8 md:py-6">
-				{/* ── Header ─────────────────────────────────── */}
-				<div className="mb-6">
-					<div className="flex flex-wrap items-start justify-between gap-3">
-						<div>
-							<h1 className="text-xl font-bold tracking-tight text-foreground">
-								{data.githubLogin !== null
-									? `${data.githubLogin}'s Workbench`
-									: isSignedIn
-										? "Team Workbench"
-										: "QuickHub"}
-							</h1>
-							<p className="mt-1.5 font-mono text-[11px] text-muted-foreground/60">
-								{summaryText}
-							</p>
-						</div>
-						<Button
-							asChild
-							size="sm"
-							variant="outline"
-							className="h-7 text-xs font-mono"
-						>
-							<Link href="/inbox">Inbox</Link>
-						</Button>
-					</div>
+			<div className="mx-auto max-w-[1600px] px-4 py-4 md:px-6 md:py-5">
+				{/* Command palette - auto-focused */}
+				<div className="mb-4">
+					<DashboardCommandPalette
+						repos={data.repos}
+						prs={allPrs}
+						issues={data.recentIssues}
+					/>
 				</div>
 
+				{/* Sign-in CTA */}
 				{!isSignedIn && (
-					<div className="mb-5 flex items-center gap-3 rounded-lg border border-dashed border-border bg-card/60 px-4 py-3">
+					<div className="mb-4 flex items-center gap-3 rounded-lg border border-dashed border-border bg-card/60 px-4 py-3">
 						<GitHubIcon className="size-5 shrink-0 text-foreground/40" />
 						<div className="min-w-0 flex-1">
 							<p className="text-xs font-medium text-foreground">
@@ -255,406 +409,227 @@ export function HomeDashboard({
 					</div>
 				)}
 
-				{/* ── Main grid ──────────────────────────────── */}
-				<div className="grid gap-5 xl:grid-cols-12">
-					<div className="space-y-5 xl:col-span-8">
-						<AttentionQueueCard
-							items={filteredQueue}
-							scope={attentionScope}
-							onScopeChange={setAttentionScope}
-						/>
+				{/* Attention banner — CI failures */}
+				{data.blockedItems.filter((b) => b.type === "ci_failure").length >
+					0 && (
+					<AttentionBanner
+						items={data.blockedItems.filter((b) => b.type === "ci_failure")}
+					/>
+				)}
 
-						<PrListCard
-							title="Your Pull Requests"
-							emptyLabel="No open PRs by you"
-							icon={<User className="size-3.5 text-emerald-500" />}
-							prs={data.yourPrs}
-							isOwned
-						/>
+				{/* Three-column grid */}
+				<div className="grid gap-4 lg:grid-cols-3">
+					{/* Column 1: Pull Requests */}
+					<Column
+						title="Pull Requests"
+						icon={<GitPullRequest className="size-3.5" />}
+						count={allPrs.length}
+					>
+						{allPrs.length === 0 && (
+							<EmptyState>No recent pull requests.</EmptyState>
+						)}
+						{allPrs.slice(0, 30).map((pr) => (
+							<PrRow
+								key={`${pr.ownerLogin}/${pr.repoName}#${pr.number}`}
+								pr={pr}
+								isOwned={pr.authorLogin === data.githubLogin}
+							/>
+						))}
+					</Column>
 
-						<ActivityCard items={data.recentActivity} />
-					</div>
+					{/* Column 2: Issues */}
+					<Column
+						title="Issues"
+						icon={<CircleDot className="size-3.5" />}
+						count={data.recentIssues.length}
+					>
+						{data.recentIssues.length === 0 && (
+							<EmptyState>No recent issues.</EmptyState>
+						)}
+						{data.recentIssues.map((issue) => (
+							<IssueRow
+								key={`${issue.ownerLogin}/${issue.repoName}#${issue.number}`}
+								issue={issue}
+							/>
+						))}
+					</Column>
 
-					<div className="space-y-5 xl:col-span-4">
-						<RecentReposCard yourPrs={data.yourPrs} />
-						<PrListCard
-							title="Recently Active PRs"
-							emptyLabel="No recent pull requests"
-							icon={<GitBranch className="size-3.5 text-muted-foreground" />}
-							prs={data.recentPrs}
-						/>
-					</div>
+					{/* Column 3: Repositories */}
+					<Column
+						title="Repositories"
+						icon={<GitBranch className="size-3.5" />}
+						count={data.repos.length}
+					>
+						{data.repos.length === 0 && (
+							<EmptyState>No repositories connected yet.</EmptyState>
+						)}
+						{data.repos.map((repo) => (
+							<RepoRow key={repo.fullName} repo={repo} />
+						))}
+					</Column>
 				</div>
 			</div>
 		</div>
 	);
 }
 
-function AttentionQueueCard({
+// ---------------------------------------------------------------------------
+// Attention banner for CI failures
+// ---------------------------------------------------------------------------
+
+function AttentionBanner({
 	items,
-	scope,
-	onScopeChange,
 }: {
-	items: ReadonlyArray<AttentionItem>;
-	scope: AttentionScope;
-	onScopeChange: (scope: AttentionScope) => void;
+	items: ReadonlyArray<{
+		type: "ci_failure" | "stale_pr" | "review_queue";
+		ownerLogin: string;
+		repoName: string;
+		number: number;
+		title: string;
+		reason: string;
+		githubUpdatedAt: number;
+	}>;
 }) {
-	const scopeOptions: Array<{ value: AttentionScope; label: string }> = [
-		{ value: "all", label: "All" },
-		{ value: "reviews", label: "Reviews" },
-		{ value: "yours", label: "Yours" },
-	];
-
 	return (
-		<section>
-			<div className="mb-2 flex items-center justify-between gap-2">
-				<h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground">
-					<Eye className="size-3.5 text-amber-500" />
-					Needs Attention
-					{items.length > 0 && (
-						<span className="font-mono text-[10px] font-normal text-muted-foreground/50">
-							{items.length}
-						</span>
-					)}
+		<section className="mb-4">
+			<div className="mb-1.5 flex items-center gap-2">
+				<AlertCircle className="size-3.5 text-status-closed" />
+				<h2 className="text-[11px] font-semibold uppercase tracking-wider text-status-closed">
+					CI Failures
 				</h2>
-				<div className="flex gap-px rounded-md border border-border/80 bg-border/40 overflow-hidden">
-					{scopeOptions.map((opt) => (
-						<button
-							key={opt.value}
-							type="button"
-							className={cn(
-								"px-2.5 py-1 text-[10px] font-medium transition-colors",
-								scope === opt.value
-									? "bg-foreground text-background"
-									: "bg-card text-muted-foreground hover:text-foreground",
-							)}
-							onClick={() => onScopeChange(opt.value)}
-						>
-							{opt.label}
-						</button>
-					))}
-				</div>
+				<span className="font-mono text-[10px] text-status-closed/60">
+					{items.length}
+				</span>
 			</div>
-
-			{items.length === 0 && (
-				<div className="rounded-lg border border-dashed border-border/60 bg-card/40 px-4 py-6 text-center">
-					<p className="font-mono text-[11px] text-muted-foreground/50">
-						Nothing needs your attention right now.
-					</p>
-				</div>
-			)}
-
-			{items.length > 0 && (
-				<div className="overflow-hidden rounded-lg border border-border/80">
-					{items.slice(0, 14).map((item, i) => (
-						<Link
-							key={item.id}
-							href={item.path}
-							className={cn(
-								"flex items-center gap-3 px-3 py-2.5 no-underline transition-colors hover:bg-accent/60",
-								i > 0 && "border-t border-border/50",
-							)}
-						>
-							<div className="min-w-0 flex-1">
-								<p className="truncate text-[13px] font-medium text-foreground leading-tight">
-									{item.title}
-								</p>
-								<div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground/60">
-									<span>{item.repoLabel}</span>
-									<span className="text-border">|</span>
-									<span>#{item.number}</span>
-									<span className="text-border">|</span>
-									<span>{formatRelative(item.githubUpdatedAt)}</span>
-								</div>
-							</div>
-							<span className="shrink-0 font-mono text-[10px] text-muted-foreground/50">
-								{item.reason}
-							</span>
-						</Link>
-					))}
-				</div>
-			)}
+			<div className="overflow-hidden rounded-lg border border-status-closed/20 bg-status-closed/5">
+				{items.map((item, i) => (
+					<Link
+						key={`${item.ownerLogin}/${item.repoName}#${item.number}`}
+						href={`/${item.ownerLogin}/${item.repoName}/pulls/${item.number}`}
+						className={cn(
+							"flex items-center gap-3 px-3 py-2 no-underline transition-colors hover:bg-status-closed/10",
+							i > 0 && "border-t border-status-closed/10",
+						)}
+					>
+						<FailureIcon className="size-3 shrink-0 text-status-closed" />
+						<div className="min-w-0 flex-1">
+							<p className="truncate text-[13px] font-medium text-foreground leading-tight">
+								{item.title}
+							</p>
+							<p className="mt-0.5 font-mono text-[10px] text-muted-foreground/60">
+								{item.ownerLogin}/{item.repoName} #{item.number} &middot;{" "}
+								{formatRelative(item.githubUpdatedAt)}
+							</p>
+						</div>
+						<Badge variant="destructive" className="shrink-0 text-[10px]">
+							failing
+						</Badge>
+					</Link>
+				))}
+			</div>
 		</section>
 	);
 }
 
-function PrListCard({
+function FailureIcon({ className }: { className?: string }) {
+	return (
+		<svg
+			className={cn("size-3.5", className)}
+			viewBox="0 0 16 16"
+			fill="currentColor"
+		>
+			<path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
+		</svg>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Column container
+// ---------------------------------------------------------------------------
+
+function Column({
 	title,
 	icon,
-	prs,
-	emptyLabel,
-	isOwned = false,
+	count,
+	children,
 }: {
 	title: string;
 	icon: ReactNode;
-	prs: ReadonlyArray<DashboardPrItem>;
-	emptyLabel: string;
-	isOwned?: boolean;
+	count: number;
+	children: ReactNode;
 }) {
 	return (
-		<section>
-			<div className="mb-2 flex items-center justify-between gap-2">
-				<h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground">
+		<section className="min-w-0">
+			<div className="mb-1.5 flex items-center justify-between gap-2">
+				<h2 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-foreground/80">
 					{icon}
 					{title}
 				</h2>
-				{prs.length > 0 && (
+				{count > 0 && (
 					<span className="font-mono text-[10px] text-muted-foreground/50">
-						{prs.length}
+						{count}
 					</span>
 				)}
 			</div>
-
-			{prs.length === 0 && (
-				<div className="rounded-lg border border-dashed border-border/60 bg-card/40 px-4 py-5 text-center">
-					<p className="font-mono text-[11px] text-muted-foreground/50">
-						{emptyLabel}
-					</p>
-				</div>
-			)}
-
-			{prs.length > 0 && (
-				<div className="overflow-hidden rounded-lg border border-border/80">
-					{prs.slice(0, 8).map((pr, i) => (
-						<Link
-							key={`${pr.ownerLogin}/${pr.repoName}#${pr.number}`}
-							href={`/${pr.ownerLogin}/${pr.repoName}/pulls/${pr.number}`}
-							className={cn(
-								"flex items-center gap-2.5 px-3 py-2 no-underline transition-colors hover:bg-accent/60",
-								i > 0 && "border-t border-border/50",
-							)}
-						>
-							<PrStateIcon state={pr.state} draft={pr.draft} />
-							<div className="min-w-0 flex-1">
-								<p className="truncate text-[13px] font-medium text-foreground leading-tight">
-									{pr.title}
-								</p>
-								<div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground/60">
-									<span className="truncate">
-										{pr.ownerLogin}/{pr.repoName}
-									</span>
-									<span className="text-border">|</span>
-									<span>#{pr.number}</span>
-									<span className="text-border">|</span>
-									<span>{formatRelative(pr.githubUpdatedAt)}</span>
-									{pr.commentCount > 0 && (
-										<>
-											<span className="text-border">|</span>
-											<span className="flex items-center gap-0.5">
-												<MessageCircle className="size-2.5" />
-												{pr.commentCount}
-											</span>
-										</>
-									)}
-								</div>
-							</div>
-							{isOwned && pr.lastCheckConclusion === "failure" && (
-								<span className="shrink-0 font-mono text-[10px] text-red-500/70">
-									CI failing
-								</span>
-							)}
-						</Link>
-					))}
-				</div>
-			)}
-		</section>
-	);
-}
-
-function ActivityCard({ items }: { items: ReadonlyArray<ActivityItem> }) {
-	return (
-		<section>
-			<div className="mb-2">
-				<h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground">
-					<Activity className="size-3.5 text-sky-500" />
-					Recent Activity
-				</h2>
+			<div className="overflow-hidden rounded-lg border border-border/60 bg-card/30">
+				<ScrollArea className="h-[calc(100vh-220px)]">{children}</ScrollArea>
 			</div>
-
-			{items.length === 0 && (
-				<div className="rounded-lg border border-dashed border-border/60 bg-card/40 px-4 py-5 text-center">
-					<p className="font-mono text-[11px] text-muted-foreground/50">
-						No recent activity yet.
-					</p>
-				</div>
-			)}
-
-			{items.length > 0 && (
-				<div className="overflow-hidden rounded-lg border border-border/80">
-					{items.slice(0, 14).map((activity, index) => (
-						<ActivityRow
-							key={`${activity.ownerLogin}/${activity.repoName}-${activity.createdAt}-${index}`}
-							activity={activity}
-							isFirst={index === 0}
-						/>
-					))}
-				</div>
-			)}
 		</section>
 	);
 }
 
-function RecentReposCard({
-	yourPrs,
-}: {
-	yourPrs: ReadonlyArray<DashboardPrItem>;
-}) {
-	// Derive recent repos from the user's PRs — deduped, ordered by most recent activity
-	const seen = new Set<string>();
-	const recentRepos: Array<{
-		key: string;
-		ownerLogin: string;
-		repoName: string;
-		lastActivity: number;
-	}> = [];
-
-	// yourPrs is already sorted by githubUpdatedAt desc from the server
-	for (const pr of yourPrs) {
-		const key = `${pr.ownerLogin}/${pr.repoName}`;
-		if (seen.has(key)) continue;
-		seen.add(key);
-		recentRepos.push({
-			key,
-			ownerLogin: pr.ownerLogin,
-			repoName: pr.repoName,
-			lastActivity: pr.githubUpdatedAt,
-		});
-		if (recentRepos.length >= 5) break;
-	}
-
+function EmptyState({ children }: { children: ReactNode }) {
 	return (
-		<section>
-			<div className="mb-2">
-				<h2 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground">
-					<GitBranch className="size-3.5 text-muted-foreground" />
-					Recent Repositories
-				</h2>
-			</div>
-
-			{recentRepos.length === 0 && (
-				<div className="rounded-lg border border-dashed border-border/60 bg-card/40 px-4 py-5 text-center">
-					<p className="font-mono text-[11px] text-muted-foreground/50">
-						Open a PR to see your repos here.
-					</p>
-				</div>
-			)}
-
-			{recentRepos.length > 0 && (
-				<div className="overflow-hidden rounded-lg border border-border/80">
-					{recentRepos.map((repo, i) => (
-						<Link
-							key={repo.key}
-							href={`/${repo.ownerLogin}/${repo.repoName}/pulls`}
-							className={cn(
-								"flex items-center justify-between gap-2 px-3 py-2 no-underline transition-colors hover:bg-accent/60",
-								i > 0 && "border-t border-border/50",
-							)}
-						>
-							<p className="truncate text-[13px] font-medium text-foreground leading-tight">
-								{repo.key}
-							</p>
-							<span className="shrink-0 font-mono text-[10px] text-muted-foreground/40">
-								{formatRelative(repo.lastActivity)}
-							</span>
-						</Link>
-					))}
-				</div>
-			)}
-		</section>
+		<div className="px-4 py-10 text-center">
+			<p className="font-mono text-[11px] text-muted-foreground/50">
+				{children}
+			</p>
+		</div>
 	);
 }
 
-function ActivityRow({
-	activity,
-	isFirst,
-}: {
-	activity: ActivityItem;
-	isFirst: boolean;
-}) {
-	const href = (() => {
-		const base = `/${activity.ownerLogin}/${activity.repoName}`;
-		if (activity.entityNumber === null) return base;
-		if (
-			activity.activityType === "pr_opened" ||
-			activity.activityType === "pr_closed" ||
-			activity.activityType === "pr_merged" ||
-			activity.activityType === "pr_review"
-		) {
-			return `${base}/pulls/${activity.entityNumber}`;
-		}
-		if (
-			activity.activityType === "issue_opened" ||
-			activity.activityType === "issue_closed"
-		) {
-			return `${base}/issues/${activity.entityNumber}`;
-		}
-		return base;
-	})();
+// ---------------------------------------------------------------------------
+// Pull Request Row
+// ---------------------------------------------------------------------------
 
+function PrRow({ pr, isOwned }: { pr: DashboardPrItem; isOwned: boolean }) {
 	return (
 		<Link
-			href={href}
-			className={cn(
-				"flex items-center gap-3 px-3 py-2 no-underline transition-colors hover:bg-accent/60",
-				!isFirst && "border-t border-border/50",
-			)}
+			href={`/${pr.ownerLogin}/${pr.repoName}/pulls/${pr.number}`}
+			className="flex items-center gap-2.5 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
 		>
-			{activity.actorAvatarUrl !== null ? (
-				<Avatar className="size-5 ring-1 ring-border/50">
-					<AvatarImage
-						src={activity.actorAvatarUrl}
-						alt={activity.actorLogin ?? ""}
-					/>
-					<AvatarFallback className="text-[8px] font-mono">
-						{activity.actorLogin?.[0]?.toUpperCase() ?? "?"}
-					</AvatarFallback>
-				</Avatar>
-			) : (
-				<div className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted/60">
-					<Activity className="size-2.5 text-muted-foreground/50" />
-				</div>
-			)}
+			<PrStateIcon state={pr.state} draft={pr.draft} />
 			<div className="min-w-0 flex-1">
-				<p className="truncate text-[13px] text-foreground leading-tight">
-					<span className="font-medium">
-						{activity.actorLogin ?? "Someone"}
-					</span>{" "}
-					<span className="text-muted-foreground">
-						{activityVerb(activity.activityType)}
-					</span>{" "}
-					{activity.title}
+				<p className="truncate text-[13px] font-medium text-foreground leading-tight">
+					{pr.title}
 				</p>
 				<div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground/60">
-					<span>
-						{activity.ownerLogin}/{activity.repoName}
+					<span className="truncate">
+						{pr.ownerLogin}/{pr.repoName}
 					</span>
 					<span className="text-border">|</span>
-					<span>{formatRelative(activity.createdAt)}</span>
+					<span>#{pr.number}</span>
+					<span className="text-border">|</span>
+					<span>{formatRelative(pr.githubUpdatedAt)}</span>
+					{pr.commentCount > 0 && (
+						<>
+							<span className="text-border">|</span>
+							<span className="flex items-center gap-0.5">
+								<MessageCircle className="size-2.5" />
+								{pr.commentCount}
+							</span>
+						</>
+					)}
 				</div>
 			</div>
+			{isOwned && pr.lastCheckConclusion === "failure" && (
+				<Badge variant="destructive" className="shrink-0 text-[10px]">
+					CI
+				</Badge>
+			)}
+			{pr.lastCheckConclusion === "success" && <CheckIcon />}
 		</Link>
 	);
-}
-
-function activityVerb(type: string): string {
-	switch (type) {
-		case "pr_opened":
-			return "opened PR";
-		case "pr_closed":
-			return "closed PR";
-		case "pr_merged":
-			return "merged PR";
-		case "pr_review":
-			return "reviewed PR";
-		case "issue_opened":
-			return "opened issue";
-		case "issue_closed":
-			return "closed issue";
-		case "push":
-			return "pushed to";
-		default:
-			return type.replace(/_/g, " ");
-	}
 }
 
 function PrStateIcon({
@@ -666,12 +641,12 @@ function PrStateIcon({
 }) {
 	if (draft) {
 		return (
-			<div className="mt-0.5 size-3.5 shrink-0 rounded-full border-2 border-muted-foreground" />
+			<div className="mt-0.5 size-3.5 shrink-0 rounded-full border-2 border-muted-foreground/50" />
 		);
 	}
 	if (state === "open") {
 		return (
-			<GitPullRequest className="mt-0.5 size-3.5 shrink-0 text-green-600" />
+			<GitPullRequest className="mt-0.5 size-3.5 shrink-0 text-status-open" />
 		);
 	}
 	return (
@@ -679,20 +654,130 @@ function PrStateIcon({
 	);
 }
 
+function CheckIcon() {
+	return (
+		<svg
+			className="size-3 shrink-0 text-status-open"
+			viewBox="0 0 16 16"
+			fill="currentColor"
+		>
+			<path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
+		</svg>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Issue Row
+// ---------------------------------------------------------------------------
+
+function IssueRow({ issue }: { issue: DashboardIssueItem }) {
+	return (
+		<Link
+			href={`/${issue.ownerLogin}/${issue.repoName}/issues/${issue.number}`}
+			className="flex items-center gap-2.5 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
+		>
+			<CircleDot
+				className={cn(
+					"mt-0.5 size-3.5 shrink-0",
+					issue.state === "open" ? "text-status-open" : "text-muted-foreground",
+				)}
+			/>
+			<div className="min-w-0 flex-1">
+				<p className="truncate text-[13px] font-medium text-foreground leading-tight">
+					{issue.title}
+				</p>
+				<div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground/60">
+					<span className="truncate">
+						{issue.ownerLogin}/{issue.repoName}
+					</span>
+					<span className="text-border">|</span>
+					<span>#{issue.number}</span>
+					<span className="text-border">|</span>
+					<span>{formatRelative(issue.githubUpdatedAt)}</span>
+					{issue.commentCount > 0 && (
+						<>
+							<span className="text-border">|</span>
+							<span className="flex items-center gap-0.5">
+								<MessageCircle className="size-2.5" />
+								{issue.commentCount}
+							</span>
+						</>
+					)}
+				</div>
+			</div>
+			{issue.labelNames.length > 0 && (
+				<div className="flex shrink-0 gap-1">
+					{issue.labelNames.slice(0, 2).map((label) => (
+						<Badge key={label} variant="outline" className="text-[10px]">
+							{label}
+						</Badge>
+					))}
+					{issue.labelNames.length > 2 && (
+						<span className="font-mono text-[10px] text-muted-foreground/40">
+							+{issue.labelNames.length - 2}
+						</span>
+					)}
+				</div>
+			)}
+		</Link>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Repository Row
+// ---------------------------------------------------------------------------
+
+function RepoRow({ repo }: { repo: RepoSummary }) {
+	return (
+		<Link
+			href={`/${repo.ownerLogin}/${repo.name}/pulls`}
+			className="flex items-center justify-between gap-2 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
+		>
+			<div className="min-w-0 flex-1">
+				<p className="truncate text-[13px] font-medium text-foreground leading-tight">
+					{repo.fullName}
+				</p>
+				<div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground/60">
+					<span>{repo.openPrCount} PRs</span>
+					<span className="text-border">|</span>
+					<span>{repo.openIssueCount} issues</span>
+					{repo.lastPushAt !== null && (
+						<>
+							<span className="text-border">|</span>
+							<span>{formatRelative(repo.lastPushAt)}</span>
+						</>
+					)}
+				</div>
+			</div>
+			{repo.failingCheckCount > 0 && (
+				<Badge variant="destructive" className="shrink-0 text-[10px]">
+					{repo.failingCheckCount} CI
+				</Badge>
+			)}
+		</Link>
+	);
+}
+
+// ---------------------------------------------------------------------------
+// Skeleton
+// ---------------------------------------------------------------------------
+
 export function DashboardSkeleton() {
 	return (
-		<div className="h-full overflow-y-auto bg-dotgrid px-4 py-5 md:px-8 md:py-6">
-			<Skeleton className="mb-2 h-5 w-44" />
-			<Skeleton className="mb-6 h-3 w-72" />
-			<div className="grid gap-5 xl:grid-cols-12">
-				<div className="space-y-5 xl:col-span-8">
-					<Skeleton className="h-56 rounded-lg" />
-					<Skeleton className="h-64 rounded-lg" />
-					<Skeleton className="h-64 rounded-lg" />
+		<div className="h-full overflow-y-auto bg-dotgrid px-4 py-4 md:px-6 md:py-5">
+			<Skeleton className="mb-4 h-10 w-full rounded-lg" />
+			<div className="grid gap-4 lg:grid-cols-3">
+				<div className="space-y-0">
+					<Skeleton className="mb-1.5 h-4 w-28" />
+					<Skeleton className="h-72 rounded-lg" />
 				</div>
-				<div className="space-y-5 xl:col-span-4">
-					<Skeleton className="h-64 rounded-lg" />
-					<Skeleton className="h-64 rounded-lg" />
+				<div className="space-y-0">
+					<Skeleton className="mb-1.5 h-4 w-28" />
+					<Skeleton className="h-72 rounded-lg" />
+				</div>
+				<div className="space-y-0">
+					<Skeleton className="mb-1.5 h-4 w-28" />
+					<Skeleton className="h-72 rounded-lg" />
 				</div>
 			</div>
 		</div>

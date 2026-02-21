@@ -48,17 +48,15 @@ export function PullRequestListClient({
 		useQueryStates(stateFilterParsers);
 
 	const client = useProjectionQueries();
+	const state = stateFilter === "all" ? undefined : stateFilter;
 	const prsAtom = useMemo(
 		() =>
 			client.listPullRequests.subscription({
 				ownerLogin: owner,
 				name,
-				state:
-					stateFilter === "all"
-						? undefined
-						: (stateFilter as "open" | "closed"),
+				state,
 			}),
-		[client, owner, name, stateFilter],
+		[client, owner, name, state],
 	);
 
 	// Use server-fetched data immediately; swap to subscription once connected.
@@ -246,7 +244,7 @@ function PrStateIcon({
 	if (state === "open")
 		return (
 			<svg
-				className="size-4 text-green-600"
+				className="size-4 text-status-open"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -255,7 +253,7 @@ function PrStateIcon({
 		);
 	return (
 		<svg
-			className="size-4 text-purple-600"
+			className="size-4 text-status-merged"
 			viewBox="0 0 16 16"
 			fill="currentColor"
 		>
@@ -267,7 +265,7 @@ function PrStateIcon({
 function CheckBadge({ conclusion }: { conclusion: string }) {
 	if (conclusion === "success")
 		return (
-			<Badge variant="secondary" className="text-xs text-green-600">
+			<Badge variant="secondary" className="text-xs text-status-open">
 				Passing
 			</Badge>
 		);

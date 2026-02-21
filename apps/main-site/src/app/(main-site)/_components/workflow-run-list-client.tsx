@@ -237,12 +237,12 @@ function ConclusionIcon({
 }) {
 	if (status === "in_progress" || status === "queued")
 		return (
-			<div className="mt-0.5 size-3.5 rounded-full border-2 border-yellow-500 border-t-transparent animate-spin" />
+			<div className="mt-0.5 size-3.5 rounded-full border-2 border-status-label border-t-transparent animate-spin" />
 		);
 	if (conclusion === "success")
 		return (
 			<svg
-				className="mt-0.5 size-3.5 text-green-600"
+				className="mt-0.5 size-3.5 text-status-open"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -252,7 +252,7 @@ function ConclusionIcon({
 	if (conclusion === "failure")
 		return (
 			<svg
-				className="mt-0.5 size-3.5 text-red-600"
+				className="mt-0.5 size-3.5 text-status-closed"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>

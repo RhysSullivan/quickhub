@@ -12,15 +12,20 @@ import { Button } from "@packages/ui/components/button";
 import {
 	ArrowDown,
 	ArrowUp,
+	CheckCircle2,
 	ChevronDown,
 	ChevronsDown,
 	ChevronsUp,
+	Clock,
 	Columns2,
 	ExternalLink,
 	FolderOpen,
+	ListChecks,
+	Loader2,
 	MessageSquare,
 	Rows3,
 	Search,
+	TriangleAlert,
 } from "@packages/ui/components/icons";
 import { Input } from "@packages/ui/components/input";
 import { Kbd } from "@packages/ui/components/kbd";
@@ -60,6 +65,11 @@ import {
 import { AssigneesCombobox } from "@/app/(main-site)/_components/assignees-combobox";
 import { LabelsCombobox } from "@/app/(main-site)/_components/labels-combobox";
 import { MarkdownBody } from "@/components/markdown-body";
+import {
+	extractErrorMessage,
+	extractErrorTag,
+	extractRpcDefectMessage,
+} from "@/lib/rpc-error";
 
 // ---------------------------------------------------------------------------
 // Error extraction helper
@@ -80,26 +90,13 @@ function extractInteractionError(
 	if (Option.isNone(errOption)) return fallback;
 
 	const err = errOption.value;
-	if (typeof err !== "object" || err === null) return fallback;
 
-	// GitHubInteractionError — has _tag + message
-	if ("_tag" in err && "message" in err) {
-		const msg = (err as { message: unknown }).message;
-		if (typeof msg === "string" && msg.length > 0) return msg;
-	}
+	const message = extractErrorMessage(err);
+	if (message !== null) return message;
 
-	// RpcDefectError — has defect with message
-	if (
-		"_tag" in err &&
-		(err as { _tag: unknown })._tag === "RpcDefectError" &&
-		"defect" in err
-	) {
-		const defect = (err as { defect: unknown }).defect;
-		if (typeof defect === "string" && defect.length > 0) return defect;
-		if (typeof defect === "object" && defect !== null && "message" in defect) {
-			const msg = (defect as { message: unknown }).message;
-			if (typeof msg === "string" && msg.length > 0) return msg;
-		}
+	if (extractErrorTag(err) === "RpcDefectError") {
+		const defectMessage = extractRpcDefectMessage(err);
+		if (defectMessage !== null) return defectMessage;
 	}
 
 	return fallback;
@@ -302,7 +299,13 @@ function patchHasCollapsedContext(patch: string): boolean {
 	return Array.from(patch.matchAll(HUNK_HEADER_PATTERN)).length > 0;
 }
 
-function MouseDownExpandContainer({ children }: { children: ReactElement }) {
+function MouseDownExpandContainer({
+	children,
+	disabledExpandTooltip,
+}: {
+	children: ReactElement;
+	disabledExpandTooltip?: string;
+}) {
 	const wrapperRef = useRef<HTMLDivElement>(null);
 
 	useEffect(() => {
@@ -311,6 +314,42 @@ function MouseDownExpandContainer({ children }: { children: ReactElement }) {
 
 		const shadow = host.shadowRoot;
 		if (shadow === null) return;
+
+		const isExpandedDisabled = disabledExpandTooltip !== undefined;
+		const setExpandButtonState = () => {
+			const buttons = shadow.querySelectorAll<HTMLElement>(
+				"[data-expand-button]",
+			);
+			for (const button of buttons) {
+				if (!isExpandedDisabled) {
+					delete button.dataset.quickhubExpandDisabled;
+					button.removeAttribute("disabled");
+					button.removeAttribute("aria-disabled");
+					button.style.opacity = "";
+					button.style.cursor = "";
+					button.style.filter = "";
+					button.title = "";
+					if (button.dataset.quickhubOriginalTitle !== undefined) {
+						button.title = button.dataset.quickhubOriginalTitle;
+						delete button.dataset.quickhubOriginalTitle;
+					}
+					continue;
+				}
+
+				const tooltip =
+					disabledExpandTooltip ?? "Could not load full context for this file";
+				button.dataset.quickhubExpandDisabled = "true";
+				button.dataset.quickhubOriginalTitle = button.title;
+				button.setAttribute("disabled", "");
+				button.setAttribute("aria-disabled", "true");
+				button.style.opacity = "0.45";
+				button.style.cursor = "not-allowed";
+				button.style.filter = "grayscale(1)";
+				button.title = tooltip;
+			}
+		};
+
+		setExpandButtonState();
 
 		let suppressNextClick = false;
 
@@ -331,6 +370,11 @@ function MouseDownExpandContainer({ children }: { children: ReactElement }) {
 			if (event.button !== 0) return;
 			const expandButton = getExpandButton(event);
 			if (expandButton === null) return;
+			if (expandButton.dataset.quickhubExpandDisabled === "true") {
+				event.preventDefault();
+				event.stopPropagation();
+				return;
+			}
 
 			event.preventDefault();
 			event.stopPropagation();
@@ -361,7 +405,7 @@ function MouseDownExpandContainer({ children }: { children: ReactElement }) {
 			shadow.removeEventListener("mousedown", handleMouseDown, true);
 			shadow.removeEventListener("click", handleClickCapture, true);
 		};
-	});
+	}, [disabledExpandTooltip]);
 
 	return <div ref={wrapperRef}>{children}</div>;
 }
@@ -1738,16 +1782,21 @@ const DiffPanel = forwardRef<
 												{hasCollapsedContext && fullContextFiles === null && (
 													<Button
 														variant="ghost"
-														size="sm"
-														className="h-5 px-1.5 text-[10px]"
+														size="icon-sm"
+														className="size-5"
 														onClick={() =>
 															void loadFullContextForFile(entry.filename)
 														}
 														disabled={isLoadingFullContext}
+														aria-label="Load full context"
+														title="Load full context"
 													>
-														{isLoadingFullContext
-															? "Loading context..."
-															: "Load context"}
+														<Loader2
+															className={cn(
+																"size-3.5",
+																isLoadingFullContext && "animate-spin",
+															)}
+														/>
 													</Button>
 												)}
 												{entry.reviewComments.length > 0 && (
@@ -1781,7 +1830,11 @@ const DiffPanel = forwardRef<
 												{entry.patch !== null ? (
 													<div className="overflow-x-auto border-t">
 														{fullContextFiles !== null ? (
-															<MouseDownExpandContainer>
+															<MouseDownExpandContainer
+																disabledExpandTooltip={
+																	fullContextError ?? undefined
+																}
+															>
 																<MultiFileDiff
 																	oldFile={fullContextFiles.oldFile}
 																	newFile={fullContextFiles.newFile}
@@ -1791,7 +1844,11 @@ const DiffPanel = forwardRef<
 																/>
 															</MouseDownExpandContainer>
 														) : (
-															<MouseDownExpandContainer>
+															<MouseDownExpandContainer
+																disabledExpandTooltip={
+																	fullContextError ?? undefined
+																}
+															>
 																<PatchDiff
 																	patch={entry.patch}
 																	lineAnnotations={[...inlineAnnotations]}
@@ -1929,11 +1986,6 @@ const DiffPanel = forwardRef<
 																	}}
 																/>
 															</MouseDownExpandContainer>
-														)}
-														{fullContextError !== null && (
-															<p className="px-3 py-1.5 text-[10px] text-amber-600 dark:text-amber-400">
-																{fullContextError}
-															</p>
 														)}
 													</div>
 												) : (
@@ -2443,12 +2495,9 @@ function InfoSidebar({
 		(check) => check.conclusion === "success",
 	).length;
 
-	const [activityQuery, setActivityQuery] = useState("");
 	const [checkFilter, setCheckFilter] = useState<
 		"all" | "failing" | "pending" | "passing"
 	>("all");
-
-	const normalizedActivityQuery = activityQuery.trim().toLowerCase();
 
 	const visibleChecks = pr.checkRuns.filter((check) => {
 		const matchesStatus =
@@ -2460,14 +2509,7 @@ function InfoSidebar({
 						? check.status === "queued" || check.status === "in_progress"
 						: check.conclusion === "success";
 
-		if (!matchesStatus) return false;
-		if (normalizedActivityQuery.length === 0) return true;
-
-		const conclusion = check.conclusion ?? "";
-		return (
-			check.name.toLowerCase().includes(normalizedActivityQuery) ||
-			conclusion.toLowerCase().includes(normalizedActivityQuery)
-		);
+		return matchesStatus;
 	});
 
 	// Deduplicate reviews: keep only the latest review per author
@@ -2487,27 +2529,36 @@ function InfoSidebar({
 		return [...byAuthor.values()];
 	})();
 
-	const visibleReviews = latestReviewsByAuthor.filter((review) => {
-		if (normalizedActivityQuery.length === 0) return true;
-		return (
-			(review.authorLogin?.toLowerCase().includes(normalizedActivityQuery) ??
-				false) ||
-			review.state.toLowerCase().includes(normalizedActivityQuery)
-		);
-	});
+	const visibleReviews = latestReviewsByAuthor;
 
-	const visibleComments = pr.comments.filter((comment) => {
-		if (normalizedActivityQuery.length === 0) return true;
-		return (
-			comment.body.toLowerCase().includes(normalizedActivityQuery) ||
-			(comment.authorLogin?.toLowerCase().includes(normalizedActivityQuery) ??
-				false)
-		);
-	});
+	const visibleComments = pr.comments;
 
 	const orderedDraftReplies = [...reviewDraftReplies].sort(
 		(a, b) => a.createdAt - b.createdAt,
 	);
+
+	const checkFilters = [
+		{
+			value: "all" as const,
+			label: "All",
+			Icon: ListChecks,
+		},
+		{
+			value: "failing" as const,
+			label: "Fail",
+			Icon: TriangleAlert,
+		},
+		{
+			value: "pending" as const,
+			label: "Pend",
+			Icon: Clock,
+		},
+		{
+			value: "passing" as const,
+			label: "Pass",
+			Icon: CheckCircle2,
+		},
+	] as const;
 
 	return (
 		<div className="flex flex-col divide-y">
@@ -2592,86 +2643,6 @@ function InfoSidebar({
 				)}
 			</SidebarSection>
 
-			{/* ── Actions ── */}
-			<SidebarSection>
-				<PrActionBar
-					ownerLogin={owner}
-					name={name}
-					number={prNumber}
-					repositoryId={pr.repositoryId}
-					state={pr.state}
-					draft={pr.draft}
-					mergedAt={pr.mergedAt}
-					mergeableState={pr.mergeableState}
-					headSha={pr.headSha}
-				/>
-			</SidebarSection>
-
-			{/* ── Changed files tree ── */}
-			{fileCount > 0 && (
-				<SidebarSection>
-					<SidebarHeading count={fileCount}>Changed files</SidebarHeading>
-					<div className="max-h-72 overflow-y-auto -mx-1">
-						{fileTree.map((node) => (
-							<FileTreeItem
-								key={node.fullPath}
-								node={node}
-								focusedFilename={focusedFilename}
-								onJumpToFile={onJumpToFile}
-								depth={0}
-							/>
-						))}
-					</div>
-				</SidebarSection>
-			)}
-
-			{/* ── Draft replies ── */}
-			{orderedDraftReplies.length > 0 && (
-				<>
-					<SidebarSection>
-						<div className="flex items-center justify-between mb-2">
-							<SidebarHeading count={orderedDraftReplies.length}>
-								Draft replies
-							</SidebarHeading>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-6 px-2 text-xs text-muted-foreground"
-								onClick={onClearDraftReplies}
-							>
-								Clear all
-							</Button>
-						</div>
-						<div className="space-y-2">
-							{orderedDraftReplies.map((draftReply) => (
-								<ReviewDraftReplyCard
-									key={draftReply.id}
-									draftReply={draftReply}
-									onRemove={() => onRemoveDraftReply(draftReply.id)}
-									onSave={(nextBody) =>
-										onUpdateDraftReplyBody(draftReply.id, nextBody)
-									}
-								/>
-							))}
-						</div>
-					</SidebarSection>
-				</>
-			)}
-
-			{/* ── Submit Review ── */}
-			{pr.state === "open" && pr.mergedAt === null && (
-				<SidebarSection>
-					<ReviewSubmitSection
-						ownerLogin={owner}
-						name={name}
-						repositoryId={pr.repositoryId}
-						number={prNumber}
-						draftReplies={reviewDraftReplies}
-						onClearDraftReplies={onClearDraftReplies}
-					/>
-				</SidebarSection>
-			)}
-
 			{/* ── Description ── */}
 			{pr.body && (
 				<SidebarSection>
@@ -2679,7 +2650,7 @@ function InfoSidebar({
 				</SidebarSection>
 			)}
 
-			{/* ── Metadata: Assignees + Labels ── */}
+			{/* ── Assignees + Labels ── */}
 			<SidebarSection className="space-y-4">
 				<AssigneesCombobox
 					ownerLogin={owner}
@@ -2704,23 +2675,74 @@ function InfoSidebar({
 				/>
 			</SidebarSection>
 
-			{/* ── Activity: Search + Checks + Reviews + Comments ── */}
+			{/* ── Changed files tree ── */}
+			{fileCount > 0 && (
+				<SidebarSection>
+					<SidebarHeading count={fileCount}>Changed files</SidebarHeading>
+					<div className="max-h-72 overflow-y-auto -mx-1">
+						{fileTree.map((node) => (
+							<FileTreeItem
+								key={node.fullPath}
+								node={node}
+								focusedFilename={focusedFilename}
+								onJumpToFile={onJumpToFile}
+								depth={0}
+							/>
+						))}
+					</div>
+				</SidebarSection>
+			)}
+
+			{/* ── Draft replies ── */}
+			{orderedDraftReplies.length > 0 && (
+				<SidebarSection>
+					<div className="flex items-center justify-between mb-2">
+						<SidebarHeading count={orderedDraftReplies.length}>
+							Draft replies
+						</SidebarHeading>
+						<Button
+							variant="ghost"
+							size="sm"
+							className="h-6 px-2 text-xs text-muted-foreground"
+							onClick={onClearDraftReplies}
+						>
+							Clear all
+						</Button>
+					</div>
+					<div className="space-y-2">
+						{orderedDraftReplies.map((draftReply) => (
+							<ReviewDraftReplyCard
+								key={draftReply.id}
+								draftReply={draftReply}
+								onRemove={() => onRemoveDraftReply(draftReply.id)}
+								onSave={(nextBody) =>
+									onUpdateDraftReplyBody(draftReply.id, nextBody)
+								}
+							/>
+						))}
+					</div>
+				</SidebarSection>
+			)}
+
+			{/* ── Submit Review ── */}
+			{pr.state === "open" && pr.mergedAt === null && (
+				<SidebarSection>
+					<ReviewSubmitSection
+						ownerLogin={owner}
+						name={name}
+						repositoryId={pr.repositoryId}
+						number={prNumber}
+						draftReplies={reviewDraftReplies}
+						onClearDraftReplies={onClearDraftReplies}
+					/>
+				</SidebarSection>
+			)}
+
+			{/* ── Activity: Checks + Reviews + Comments ── */}
 			{(pr.checkRuns.length > 0 ||
 				pr.reviews.length > 0 ||
 				pr.comments.length > 0) && (
 				<>
-					<SidebarSection className="pb-0">
-						<div className="relative">
-							<Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/60" />
-							<Input
-								value={activityQuery}
-								onChange={(event) => setActivityQuery(event.target.value)}
-								placeholder="Filter activity..."
-								className="h-8 pl-8 text-xs"
-							/>
-						</div>
-					</SidebarSection>
-
 					{/* Checks */}
 					{pr.checkRuns.length > 0 && (
 						<SidebarSection>
@@ -2729,26 +2751,22 @@ function InfoSidebar({
 									Checks
 								</SidebarHeading>
 								<div className="flex items-center gap-0.5">
-									{(
-										[
-											["all", "All"],
-											["failing", "Fail"],
-											["pending", "Pend"],
-											["passing", "Pass"],
-										] as const
-									).map(([value, label]) => (
+									{checkFilters.map(({ value, label, Icon }) => (
 										<button
 											key={value}
 											type="button"
+											aria-label={`${label} checks`}
 											onClick={() => setCheckFilter(value)}
+											title={label}
 											className={cn(
-												"rounded px-1.5 py-0.5 text-xs transition-colors cursor-pointer",
+												"rounded px-1.5 py-0.5 transition-colors cursor-pointer",
 												checkFilter === value
 													? "bg-foreground/10 text-foreground font-medium"
 													: "text-muted-foreground/60 hover:text-muted-foreground",
 											)}
 										>
-											{label}
+											<Icon className="size-3.5" />
+											<span className="sr-only">{label}</span>
 										</button>
 									))}
 								</div>
@@ -2861,6 +2879,21 @@ function InfoSidebar({
 					)}
 				</>
 			)}
+
+			{/* ── Close / Reopen + Merge ── */}
+			<SidebarSection>
+				<PrActionBar
+					ownerLogin={owner}
+					name={name}
+					number={prNumber}
+					repositoryId={pr.repositoryId}
+					state={pr.state}
+					draft={pr.draft}
+					mergedAt={pr.mergedAt}
+					mergeableState={pr.mergeableState}
+					headSha={pr.headSha}
+				/>
+			</SidebarSection>
 		</div>
 	);
 }
@@ -2886,7 +2919,6 @@ function CollapsibleDescription({ body }: { body: string }) {
 
 	return (
 		<div>
-			<SidebarHeading>Description</SidebarHeading>
 			<div
 				className={cn(
 					"prose prose-sm dark:prose-invert max-w-none overflow-x-auto text-xs leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-0 [&_h2]:text-sm [&_h2]:mt-3 [&_h2]:mb-1.5 [&_h3]:text-xs [&_h3]:mt-2.5 [&_h3]:mb-1 [&_:not(pre)>code]:px-1 [&_:not(pre)>code]:py-0 [&_:not(pre)>code]:text-[0.85em]",
@@ -2964,28 +2996,8 @@ function PrActionBar({
 
 	return (
 		<div className="space-y-2">
+			{/* Close / Reopen + Update branch */}
 			<div className="flex items-center gap-2">
-				{state === "open" && (
-					<Button
-						size="sm"
-						disabled={!isMergeable || isMerging}
-						onClick={() => {
-							doMerge({
-								correlationId: `${correlationPrefix}-merge-${Date.now()}`,
-								ownerLogin,
-								name,
-								repositoryId,
-								number,
-							});
-						}}
-						className={cn(
-							"h-8 text-xs flex-1",
-							isMergeable && "bg-green-600 hover:bg-green-700 text-white",
-						)}
-					>
-						{isMerging ? "Merging..." : "Merge pull request"}
-					</Button>
-				)}
 				{canUpdateBranch && (
 					<Button
 						variant="outline"
@@ -3047,6 +3059,30 @@ function PrActionBar({
 					</Button>
 				)}
 			</div>
+
+			{/* Merge — spaced below close */}
+			{state === "open" && (
+				<Button
+					size="sm"
+					disabled={!isMergeable || isMerging}
+					onClick={() => {
+						doMerge({
+							correlationId: `${correlationPrefix}-merge-${Date.now()}`,
+							ownerLogin,
+							name,
+							repositoryId,
+							number,
+						});
+					}}
+					className={cn(
+						"h-8 text-xs w-full mt-2",
+						isMergeable && "bg-green-600 hover:bg-green-700 text-white",
+					)}
+				>
+					{isMerging ? "Merging..." : "Merge pull request"}
+				</Button>
+			)}
+
 			{hasError && (
 				<p className="text-xs text-destructive">
 					{Result.isFailure(mergeResult) && "Merge failed. "}

@@ -1,6 +1,15 @@
 import { api } from "@packages/database/convex/_generated/api";
+import { Either, Schema } from "effect";
 import { NextResponse } from "next/server";
 import { fetchAuthAction } from "@/lib/auth-server";
+
+const SyncNotificationsResultSchema = Schema.Struct({
+	syncedCount: Schema.Number,
+});
+
+const decodeSyncNotificationsResult = Schema.decodeUnknownEither(
+	SyncNotificationsResultSchema,
+);
 
 export async function POST() {
 	try {
@@ -8,15 +17,14 @@ export async function POST() {
 			api.rpc.notifications.syncNotifications,
 			{},
 		);
-		if (
-			typeof result === "object" &&
-			result !== null &&
-			"syncedCount" in result &&
-			typeof result.syncedCount === "number"
-		) {
-			return new NextResponse(`Synced ${result.syncedCount} notifications.`, {
-				status: 200,
-			});
+		const decodedResult = decodeSyncNotificationsResult(result);
+		if (Either.isRight(decodedResult)) {
+			return new NextResponse(
+				`Synced ${decodedResult.right.syncedCount} notifications.`,
+				{
+					status: 200,
+				},
+			);
 		}
 
 		return new NextResponse("Sync completed.", { status: 200 });

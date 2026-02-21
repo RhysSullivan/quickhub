@@ -10,7 +10,6 @@ import {
 	GitCommitHorizontal,
 	GitPullRequest,
 	Loader2,
-	Play,
 	ShieldCheck,
 	Zap,
 } from "@packages/ui/components/icons";
@@ -80,8 +79,8 @@ function SyncProgressTracker({ progress }: { progress: SyncProgress }) {
 						</div>
 					)}
 					{isDone && (
-						<div className="flex items-center justify-center size-8 rounded-full bg-emerald-500/10">
-							<Check className="size-4 text-emerald-500" />
+						<div className="flex items-center justify-center size-8 rounded-full bg-status-open/10">
+							<Check className="size-4 text-status-open" />
 						</div>
 					)}
 					{isFailed && (
@@ -110,7 +109,7 @@ function SyncProgressTracker({ progress }: { progress: SyncProgress }) {
 					<div
 						className={cn(
 							"absolute inset-y-0 left-0 rounded-full transition-all duration-700 ease-out",
-							isDone && "bg-emerald-500",
+							isDone && "bg-status-open",
 							isFailed && "bg-destructive",
 							!isDone && !isFailed && "bg-foreground/50",
 						)}

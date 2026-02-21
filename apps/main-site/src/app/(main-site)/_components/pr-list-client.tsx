@@ -2,22 +2,14 @@
 
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
-import { Loader2, MessageCircle, Search } from "@packages/ui/components/icons";
-import { Input } from "@packages/ui/components/input";
+import { Loader2, MessageCircle } from "@packages/ui/components/icons";
 import { Link } from "@packages/ui/components/link";
 import { useInfinitePaginationWithInitial } from "@packages/ui/hooks/use-paginated-atom";
 import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { useHotkey } from "@tanstack/react-hotkeys";
 import { usePathname, useRouter } from "next/navigation";
-import {
-	useCallback,
-	useEffect,
-	useId,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /** Scroll the PR list item with the given number into view within its scroll container */
 function scrollPrIntoView(prNumber: number) {
@@ -58,8 +50,6 @@ export function PrListClient({
 	const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">(
 		"open",
 	);
-	const [titleFilter, setTitleFilter] = useState("");
-	const filterInputId = useId();
 
 	const client = useProjectionQueries();
 	const paginatedAtom = useMemo(
@@ -78,19 +68,7 @@ export function PrListClient({
 	);
 	const { items: prs, sentinelRef, isLoading } = pagination;
 
-	const normalizedFilter = titleFilter.trim().toLowerCase();
-	const filteredPrs = useMemo(
-		() =>
-			prs.filter((pr) => {
-				if (normalizedFilter.length === 0) return true;
-				return (
-					pr.title.toLowerCase().includes(normalizedFilter) ||
-					String(pr.number).includes(normalizedFilter) ||
-					(pr.authorLogin?.toLowerCase().includes(normalizedFilter) ?? false)
-				);
-			}),
-		[prs, normalizedFilter],
-	);
+	const filteredPrs = useMemo(() => prs, [prs]);
 
 	const pathname = usePathname();
 	const router = useRouter();
@@ -105,15 +83,6 @@ export function PrListClient({
 	// When we load more pages via j at the end, navigate to the first new item
 	const pendingNavRef = useRef<"next" | null>(null);
 	const prevCountRef = useRef(filteredPrs.length);
-
-	useHotkey("/", (event) => {
-		event.preventDefault();
-		const input = document.getElementById(filterInputId);
-		if (input instanceof HTMLInputElement) {
-			input.focus();
-			input.select();
-		}
-	});
 
 	useEffect(() => {
 		if (
@@ -155,7 +124,7 @@ export function PrListClient({
 		const nextIndex = activeIndex + 1;
 		if (nextIndex < filteredPrs.length) {
 			navigateTo(nextIndex);
-		} else if (pagination.hasMore && normalizedFilter.length === 0) {
+		} else if (pagination.hasMore) {
 			// At the end of loaded items — load more, then navigate once loaded
 			pendingNavRef.current = "next";
 			pagination.loadMore();
@@ -180,18 +149,6 @@ export function PrListClient({
 
 	return (
 		<div className="p-1.5">
-			<div className="mb-1.5 px-1">
-				<div className="relative">
-					<Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						id={filterInputId}
-						value={titleFilter}
-						onChange={(event) => setTitleFilter(event.target.value)}
-						placeholder="Filter PRs by title, number, author (/ to focus)"
-						className="h-7 pl-7 text-[11px]"
-					/>
-				</div>
-			</div>
 			<div className="flex gap-0.5 mb-1.5 px-1">
 				{(["open", "closed", "all"] as const).map((f) => (
 					<Button
@@ -208,9 +165,7 @@ export function PrListClient({
 
 			{filteredPrs.length === 0 && !isLoading && (
 				<p className="px-2 py-8 text-xs text-muted-foreground text-center">
-					{normalizedFilter.length > 0
-						? "No pull requests match this filter."
-						: `No ${stateFilter !== "all" ? stateFilter : ""} pull requests.`}
+					{`No ${stateFilter !== "all" ? stateFilter : ""} pull requests.`}
 				</p>
 			)}
 
@@ -283,7 +238,7 @@ export function PrListClient({
 
 			{/* Sentinel for infinite scroll */}
 			<div ref={sentinelRef} className="h-1" />
-			{isLoading && normalizedFilter.length === 0 && (
+			{isLoading && (
 				<div className="flex items-center justify-center py-3">
 					<Loader2 className="size-4 animate-spin text-muted-foreground" />
 				</div>
@@ -308,7 +263,7 @@ function PrStateIcon({
 	if (state === "open")
 		return (
 			<svg
-				className="mt-0.5 size-3.5 text-green-600"
+				className="mt-0.5 size-3.5 text-status-open"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -317,7 +272,7 @@ function PrStateIcon({
 		);
 	return (
 		<svg
-			className="mt-0.5 size-3.5 text-purple-600"
+			className="mt-0.5 size-3.5 text-status-closed"
 			viewBox="0 0 16 16"
 			fill="currentColor"
 		>
@@ -328,10 +283,10 @@ function PrStateIcon({
 
 function CheckDot({ conclusion }: { conclusion: string }) {
 	if (conclusion === "success")
-		return <div className="size-2 rounded-full bg-green-500 shrink-0" />;
+		return <div className="size-2 rounded-full bg-status-open shrink-0" />;
 	if (conclusion === "failure")
-		return <div className="size-2 rounded-full bg-red-500 shrink-0" />;
-	return <div className="size-2 rounded-full bg-yellow-500 shrink-0" />;
+		return <div className="size-2 rounded-full bg-status-closed shrink-0" />;
+	return <div className="size-2 rounded-full bg-status-updated shrink-0" />;
 }
 
 function formatRelative(timestamp: number): string {

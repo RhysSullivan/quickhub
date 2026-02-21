@@ -8,9 +8,7 @@ import {
 	Loader2,
 	MessageCircle,
 	Plus,
-	Search,
 } from "@packages/ui/components/icons";
-import { Input } from "@packages/ui/components/input";
 import { Link } from "@packages/ui/components/link";
 import { LinkButton } from "@packages/ui/components/link-button";
 import { useInfinitePaginationWithInitial } from "@packages/ui/hooks/use-paginated-atom";
@@ -18,14 +16,7 @@ import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { useHotkey } from "@tanstack/react-hotkeys";
 import { usePathname, useRouter } from "next/navigation";
-import {
-	useCallback,
-	useEffect,
-	useId,
-	useMemo,
-	useRef,
-	useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const PAGE_SIZE = 30;
 
@@ -53,7 +44,7 @@ type IssueItem = {
 export function IssueListClient({
 	owner,
 	name,
-	repositoryId,
+	repositoryId: _repositoryId,
 	initialData = [],
 }: {
 	owner: string;
@@ -64,8 +55,6 @@ export function IssueListClient({
 	const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">(
 		"open",
 	);
-	const [titleFilter, setTitleFilter] = useState("");
-	const filterInputId = useId();
 
 	const client = useProjectionQueries();
 	const paginatedAtom = useMemo(
@@ -84,23 +73,7 @@ export function IssueListClient({
 	);
 	const { items: issues, sentinelRef, isLoading } = pagination;
 
-	const normalizedFilter = titleFilter.trim().toLowerCase();
-	const filteredIssues = useMemo(
-		() =>
-			issues.filter((issue) => {
-				if (normalizedFilter.length === 0) return true;
-				return (
-					issue.title.toLowerCase().includes(normalizedFilter) ||
-					String(issue.number).includes(normalizedFilter) ||
-					(issue.authorLogin?.toLowerCase().includes(normalizedFilter) ??
-						false) ||
-					issue.labelNames.some((label) =>
-						label.toLowerCase().includes(normalizedFilter),
-					)
-				);
-			}),
-		[issues, normalizedFilter],
-	);
+	const filteredIssues = useMemo(() => issues, [issues]);
 
 	const pathname = usePathname();
 	const router = useRouter();
@@ -115,15 +88,6 @@ export function IssueListClient({
 
 	const pendingNavRef = useRef<"next" | null>(null);
 	const prevCountRef = useRef(filteredIssues.length);
-
-	useHotkey("/", (event) => {
-		event.preventDefault();
-		const input = document.getElementById(filterInputId);
-		if (input instanceof HTMLInputElement) {
-			input.focus();
-			input.select();
-		}
-	});
 
 	useEffect(() => {
 		if (
@@ -163,7 +127,7 @@ export function IssueListClient({
 		const nextIndex = activeIndex + 1;
 		if (nextIndex < filteredIssues.length) {
 			navigateTo(nextIndex);
-		} else if (pagination.hasMore && normalizedFilter.length === 0) {
+		} else if (pagination.hasMore) {
 			pendingNavRef.current = "next";
 			pagination.loadMore();
 		}
@@ -185,18 +149,6 @@ export function IssueListClient({
 
 	return (
 		<div className="p-1.5">
-			<div className="mb-1.5 px-1">
-				<div className="relative">
-					<Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						id={filterInputId}
-						value={titleFilter}
-						onChange={(event) => setTitleFilter(event.target.value)}
-						placeholder="Filter issues by title, number, author, label (/ to focus)"
-						className="h-7 pl-7 text-[11px]"
-					/>
-				</div>
-			</div>
 			<div className="mb-2 px-1">
 				<LinkButton
 					href={`/${owner}/${name}/issues/new`}
@@ -225,9 +177,7 @@ export function IssueListClient({
 
 			{filteredIssues.length === 0 && !isLoading && (
 				<p className="px-2 py-8 text-xs text-muted-foreground text-center">
-					{normalizedFilter.length > 0
-						? "No issues match this filter."
-						: `No ${stateFilter !== "all" ? stateFilter : ""} issues.`}
+					{`No ${stateFilter !== "all" ? stateFilter : ""} issues.`}
 				</p>
 			)}
 
@@ -301,7 +251,7 @@ export function IssueListClient({
 			))}
 
 			<div ref={sentinelRef} className="h-1" />
-			{isLoading && normalizedFilter.length === 0 && (
+			{isLoading && (
 				<div className="flex items-center justify-center py-3">
 					<Loader2 className="size-4 animate-spin text-muted-foreground" />
 				</div>
@@ -312,8 +262,10 @@ export function IssueListClient({
 
 function IssueStateIcon({ state }: { state: "open" | "closed" }) {
 	if (state === "open")
-		return <CircleDot className="mt-0.5 size-3.5 text-green-600 shrink-0" />;
-	return <CheckCircle2 className="mt-0.5 size-3.5 text-purple-600 shrink-0" />;
+		return <CircleDot className="mt-0.5 size-3.5 text-status-open shrink-0" />;
+	return (
+		<CheckCircle2 className="mt-0.5 size-3.5 text-status-closed shrink-0" />
+	);
 }
 
 function formatRelative(timestamp: number): string {

@@ -21,7 +21,8 @@ import { cn } from "@packages/ui/lib/utils";
 import { useNotifications } from "@packages/ui/rpc/notifications";
 import { Option as Opt } from "effect";
 import { useRouter } from "next/navigation";
-import { type ReactNode, useMemo, useState } from "react";
+import { type ReactNode, useMemo } from "react";
+import { extractErrorMessage, extractErrorReason } from "@/lib/rpc-error";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -55,21 +56,21 @@ type SubjectType =
 function SubjectIcon({ type }: { type: SubjectType }) {
 	switch (type) {
 		case "PullRequest":
-			return <GitPullRequest className="size-3.5 text-green-500 shrink-0" />;
+			return <GitPullRequest className="size-3.5 text-status-open shrink-0" />;
 		case "Issue":
-			return <CircleDot className="size-3.5 text-blue-500 shrink-0" />;
+			return <CircleDot className="size-3.5 text-status-repo shrink-0" />;
 		case "Commit":
 			return <GitCommit className="size-3.5 text-muted-foreground shrink-0" />;
 		case "Release":
-			return <Package className="size-3.5 text-orange-500 shrink-0" />;
+			return <Package className="size-3.5 text-status-label shrink-0" />;
 		case "Discussion":
-			return <MessageSquare className="size-3.5 text-purple-500 shrink-0" />;
+			return <MessageSquare className="size-3.5 text-status-merged shrink-0" />;
 		case "RepositoryVulnerabilityAlert":
 		case "RepositoryDependabotAlertsThread":
-			return <ShieldAlert className="size-3.5 text-red-500 shrink-0" />;
+			return <ShieldAlert className="size-3.5 text-status-closed shrink-0" />;
 		case "CheckSuite":
 			return (
-				<div className="size-3.5 rounded-full border-2 border-yellow-500 shrink-0" />
+				<div className="size-3.5 rounded-full border-2 border-status-label shrink-0" />
 			);
 		default:
 			return <Bell className="size-3.5 text-muted-foreground shrink-0" />;
@@ -179,22 +180,10 @@ export function InboxClient({
 	const syncErrorMessage = useMemo(() => {
 		if (Opt.isNone(syncErrorOption)) return null;
 		const error = syncErrorOption.value;
-		if (
-			typeof error === "object" &&
-			error !== null &&
-			"reason" in error &&
-			typeof error.reason === "string"
-		) {
-			return error.reason;
-		}
-		if (
-			typeof error === "object" &&
-			error !== null &&
-			"message" in error &&
-			typeof error.message === "string"
-		) {
-			return error.message;
-		}
+		const reason = extractErrorReason(error);
+		if (reason !== null) return reason;
+		const message = extractErrorMessage(error);
+		if (message !== null) return message;
 		if (typeof error === "string") {
 			return error;
 		}
@@ -203,7 +192,7 @@ export function InboxClient({
 
 	const hasSyncError = syncErrorMessage !== null;
 	const isNotConnectedError =
-		syncErrorMessage !== null && syncErrorMessage.includes("not connected");
+		syncErrorMessage?.includes("not connected") || false;
 
 	if (Result.isInitial(result)) {
 		return <InboxSkeleton />;
@@ -341,7 +330,7 @@ export function InboxClient({
 						{unread.length > 0 && (
 							<section className="mb-6">
 								<div className="mb-2 flex items-center gap-1.5">
-									<div className="size-1.5 rounded-full bg-blue-500" />
+									<div className="size-1.5 rounded-full bg-status-repo" />
 									<h2 className="text-xs font-semibold text-foreground">
 										Unread
 									</h2>
@@ -512,7 +501,7 @@ function NotificationRow({
 						{notification.subjectTitle}
 					</span>
 					{notification.unread && (
-						<div className="size-1.5 rounded-full bg-blue-500 shrink-0" />
+						<div className="size-1.5 rounded-full bg-status-repo shrink-0" />
 					)}
 				</div>
 				<div className="flex items-center gap-1.5 text-[10px] text-muted-foreground mt-0.5">

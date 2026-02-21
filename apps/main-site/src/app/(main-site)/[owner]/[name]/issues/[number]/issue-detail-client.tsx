@@ -47,16 +47,6 @@ function formatRelative(timestamp: number): string {
 	});
 }
 
-function formatDate(timestamp: number): string {
-	return new Date(timestamp).toLocaleDateString(undefined, {
-		year: "numeric",
-		month: "long",
-		day: "numeric",
-		hour: "2-digit",
-		minute: "2-digit",
-	});
-}
-
 // ---------------------------------------------------------------------------
 // Issue detail client component
 // ---------------------------------------------------------------------------
@@ -111,7 +101,7 @@ export function IssueDetailClient({
 								variant={issue.state === "open" ? "default" : "secondary"}
 								className={
 									issue.state === "open"
-										? "bg-green-600 hover:bg-green-700"
+										? "bg-github-open hover:bg-github-open/90"
 										: ""
 								}
 							>
@@ -360,7 +350,7 @@ function CommentForm({
 						</p>
 					)}
 					{Result.isSuccess(commentResult) && body === "" && (
-						<p className="text-sm text-green-600">Comment submitted!</p>
+						<p className="text-sm text-github-open">Comment submitted!</p>
 					)}
 				</div>
 				<Button
@@ -462,7 +452,7 @@ function IssueStateIcon({ state }: { state: "open" | "closed" }) {
 	if (state === "open") {
 		return (
 			<svg
-				className="mt-1.5 size-5 text-green-600 shrink-0"
+				className="mt-1.5 size-5 text-github-open shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -473,7 +463,7 @@ function IssueStateIcon({ state }: { state: "open" | "closed" }) {
 	}
 	return (
 		<svg
-			className="mt-1.5 size-5 text-purple-600 shrink-0"
+			className="mt-1.5 size-5 text-github-merged shrink-0"
 			viewBox="0 0 16 16"
 			fill="currentColor"
 		>

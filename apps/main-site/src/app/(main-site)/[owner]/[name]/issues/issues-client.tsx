@@ -40,17 +40,15 @@ export function IssueListClient({
 		useQueryStates(stateFilterParsers);
 
 	const client = useProjectionQueries();
+	const state = stateFilter === "all" ? undefined : stateFilter;
 	const issuesAtom = useMemo(
 		() =>
 			client.listIssues.subscription({
 				ownerLogin: owner,
 				name,
-				state:
-					stateFilter === "all"
-						? undefined
-						: (stateFilter as "open" | "closed"),
+				state,
 			}),
-		[client, owner, name, stateFilter],
+		[client, owner, name, state],
 	);
 
 	const issues = useSubscriptionWithInitial(issuesAtom, initialData);
@@ -211,7 +209,7 @@ function IssueStateIcon({ state }: { state: "open" | "closed" }) {
 	if (state === "open") {
 		return (
 			<svg
-				className="size-4 text-green-600"
+				className="size-4 text-status-open"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -222,7 +220,7 @@ function IssueStateIcon({ state }: { state: "open" | "closed" }) {
 	}
 	return (
 		<svg
-			className="size-4 text-purple-600"
+			className="size-4 text-status-closed"
 			viewBox="0 0 16 16"
 			fill="currentColor"
 		>
