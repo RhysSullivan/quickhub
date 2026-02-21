@@ -2,14 +2,22 @@
 
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
+import { Input } from "@packages/ui/components/input";
 import { Link } from "@packages/ui/components/link";
 import { useInfinitePaginationWithInitial } from "@packages/ui/hooks/use-paginated-atom";
 import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { useHotkey } from "@tanstack/react-hotkeys";
-import { Loader2, MessageCircle } from "lucide-react";
+import { Loader2, MessageCircle, Search } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 
 /** Scroll the PR list item with the given number into view within its scroll container */
 function scrollPrIntoView(prNumber: number) {
@@ -24,6 +32,8 @@ const PAGE_SIZE = 30;
 type PrItem = {
 	readonly number: number;
 	readonly state: "open" | "closed";
+	readonly optimisticState: "pending" | "failed" | "confirmed" | null;
+	readonly optimisticErrorMessage: string | null;
 	readonly draft: boolean;
 	readonly title: string;
 	readonly authorLogin: string | null;
@@ -48,6 +58,8 @@ export function PrListClient({
 	const [stateFilter, setStateFilter] = useState<"open" | "closed" | "all">(
 		"open",
 	);
+	const [titleFilter, setTitleFilter] = useState("");
+	const filterInputId = useId();
 
 	const client = useProjectionQueries();
 	const paginatedAtom = useMemo(
@@ -66,6 +78,20 @@ export function PrListClient({
 	);
 	const { items: prs, sentinelRef, isLoading } = pagination;
 
+	const normalizedFilter = titleFilter.trim().toLowerCase();
+	const filteredPrs = useMemo(
+		() =>
+			prs.filter((pr) => {
+				if (normalizedFilter.length === 0) return true;
+				return (
+					pr.title.toLowerCase().includes(normalizedFilter) ||
+					String(pr.number).includes(normalizedFilter) ||
+					(pr.authorLogin?.toLowerCase().includes(normalizedFilter) ?? false)
+				);
+			}),
+		[prs, normalizedFilter],
+	);
+
 	const pathname = usePathname();
 	const router = useRouter();
 	const activeNumber = (() => {
@@ -74,40 +100,71 @@ export function PrListClient({
 	})();
 
 	// Find the index of the currently active PR for j/k navigation
-	const activeIndex = prs.findIndex((pr) => pr.number === activeNumber);
+	const activeIndex = filteredPrs.findIndex((pr) => pr.number === activeNumber);
 
 	// When we load more pages via j at the end, navigate to the first new item
 	const pendingNavRef = useRef<"next" | null>(null);
-	const prevCountRef = useRef(prs.length);
+	const prevCountRef = useRef(filteredPrs.length);
 
 	useEffect(() => {
-		if (prs.length > prevCountRef.current && pendingNavRef.current === "next") {
+		function handleKeyDown(event: KeyboardEvent) {
+			if (event.key !== "/") return;
+
+			const target = event.target;
+			if (target instanceof HTMLElement) {
+				const tag = target.tagName.toLowerCase();
+				if (
+					tag === "input" ||
+					tag === "textarea" ||
+					target.getAttribute("contenteditable") === "true"
+				) {
+					return;
+				}
+			}
+
+			event.preventDefault();
+			const input = document.getElementById(filterInputId);
+			if (input instanceof HTMLInputElement) {
+				input.focus();
+				input.select();
+			}
+		}
+
+		document.addEventListener("keydown", handleKeyDown);
+		return () => document.removeEventListener("keydown", handleKeyDown);
+	}, [filterInputId]);
+
+	useEffect(() => {
+		if (
+			filteredPrs.length > prevCountRef.current &&
+			pendingNavRef.current === "next"
+		) {
 			const nextIndex = prevCountRef.current; // first item of the new page
-			const pr = prs[nextIndex];
+			const pr = filteredPrs[nextIndex];
 			if (pr) {
 				router.push(`/${owner}/${name}/pulls/${pr.number}`);
 				scrollPrIntoView(pr.number);
 			}
 			pendingNavRef.current = null;
 		}
-		prevCountRef.current = prs.length;
-	}, [prs.length, prs, owner, name, router]);
+		prevCountRef.current = filteredPrs.length;
+	}, [filteredPrs.length, filteredPrs, owner, name, router]);
 
 	const navigateTo = useCallback(
 		(index: number) => {
-			const pr = prs[index];
+			const pr = filteredPrs[index];
 			if (pr) {
 				router.push(`/${owner}/${name}/pulls/${pr.number}`);
 				scrollPrIntoView(pr.number);
 			}
 		},
-		[prs, owner, name, router],
+		[filteredPrs, owner, name, router],
 	);
 
 	// j — open next PR (matches GitHub issue/PR list navigation)
 	useHotkey("J", (e) => {
 		e.preventDefault();
-		if (prs.length === 0) return;
+		if (filteredPrs.length === 0) return;
 
 		if (activeIndex === -1) {
 			navigateTo(0);
@@ -115,9 +172,9 @@ export function PrListClient({
 		}
 
 		const nextIndex = activeIndex + 1;
-		if (nextIndex < prs.length) {
+		if (nextIndex < filteredPrs.length) {
 			navigateTo(nextIndex);
-		} else if (pagination.hasMore) {
+		} else if (pagination.hasMore && normalizedFilter.length === 0) {
 			// At the end of loaded items — load more, then navigate once loaded
 			pendingNavRef.current = "next";
 			pagination.loadMore();
@@ -127,7 +184,7 @@ export function PrListClient({
 	// k — open previous PR (matches GitHub issue/PR list navigation)
 	useHotkey("K", (e) => {
 		e.preventDefault();
-		if (prs.length === 0) return;
+		if (filteredPrs.length === 0) return;
 		const nextIndex = activeIndex === -1 ? 0 : Math.max(activeIndex - 1, 0);
 		navigateTo(nextIndex);
 	});
@@ -135,13 +192,25 @@ export function PrListClient({
 	// o — also open (for when no PR is active yet, opens the first one)
 	useHotkey("O", (e) => {
 		e.preventDefault();
-		if (prs.length === 0) return;
+		if (filteredPrs.length === 0) return;
 		const index = activeIndex === -1 ? 0 : activeIndex;
 		navigateTo(index);
 	});
 
 	return (
 		<div className="p-1.5">
+			<div className="mb-1.5 px-1">
+				<div className="relative">
+					<Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
+					<Input
+						id={filterInputId}
+						value={titleFilter}
+						onChange={(event) => setTitleFilter(event.target.value)}
+						placeholder="Filter PRs by title, number, author (/ to focus)"
+						className="h-7 pl-7 text-[11px]"
+					/>
+				</div>
+			</div>
 			<div className="flex gap-0.5 mb-1.5 px-1">
 				{(["open", "closed", "all"] as const).map((f) => (
 					<Button
@@ -156,13 +225,15 @@ export function PrListClient({
 				))}
 			</div>
 
-			{prs.length === 0 && !isLoading && (
+			{filteredPrs.length === 0 && !isLoading && (
 				<p className="px-2 py-8 text-xs text-muted-foreground text-center">
-					No {stateFilter !== "all" ? stateFilter : ""} pull requests.
+					{normalizedFilter.length > 0
+						? "No pull requests match this filter."
+						: `No ${stateFilter !== "all" ? stateFilter : ""} pull requests.`}
 				</p>
 			)}
 
-			{prs.map((pr) => (
+			{filteredPrs.map((pr) => (
 				<Link
 					key={pr.number}
 					data-pr-number={pr.number}
@@ -180,6 +251,16 @@ export function PrListClient({
 							<span className="font-medium text-xs truncate leading-tight">
 								{pr.title}
 							</span>
+							{pr.optimisticState === "pending" && (
+								<Badge variant="outline" className="h-4 px-1 text-[9px]">
+									Saving...
+								</Badge>
+							)}
+							{pr.optimisticState === "failed" && (
+								<Badge variant="destructive" className="h-4 px-1 text-[9px]">
+									Write failed
+								</Badge>
+							)}
 							{pr.draft && (
 								<Badge
 									variant="outline"
@@ -206,6 +287,12 @@ export function PrListClient({
 								</span>
 							)}
 						</div>
+						{pr.optimisticState === "failed" &&
+							pr.optimisticErrorMessage !== null && (
+								<p className="mt-1 text-[10px] text-destructive truncate">
+									{pr.optimisticErrorMessage}
+								</p>
+							)}
 					</div>
 					{pr.lastCheckConclusion && (
 						<CheckDot conclusion={pr.lastCheckConclusion} />
@@ -215,7 +302,7 @@ export function PrListClient({
 
 			{/* Sentinel for infinite scroll */}
 			<div ref={sentinelRef} className="h-1" />
-			{isLoading && (
+			{isLoading && normalizedFilter.length === 0 && (
 				<div className="flex items-center justify-center py-3">
 					<Loader2 className="size-4 animate-spin text-muted-foreground" />
 				</div>

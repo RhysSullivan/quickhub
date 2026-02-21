@@ -182,6 +182,7 @@ export function PullRequestDetailClient({
 				draft={pr.draft}
 				mergedAt={pr.mergedAt}
 				mergeableState={pr.mergeableState}
+				headSha={pr.headSha}
 			/>
 
 			{/* Check runs */}
@@ -260,6 +261,10 @@ export function PullRequestDetailClient({
 									{review.authorLogin ?? "Unknown"}
 								</span>
 								<ReviewStateBadge state={review.state} />
+								<ReviewOptimisticBadge
+									optimisticState={review.optimisticState}
+									optimisticErrorMessage={review.optimisticErrorMessage}
+								/>
 								{review.submittedAt && (
 									<span className="text-xs text-muted-foreground">
 										{formatRelative(review.submittedAt)}
@@ -598,6 +603,7 @@ function PrActionBar({
 	draft,
 	mergedAt,
 	mergeableState,
+	headSha,
 }: {
 	ownerLogin: string;
 	name: string;
@@ -607,15 +613,20 @@ function PrActionBar({
 	draft: boolean;
 	mergedAt: number | null;
 	mergeableState: string | null;
+	headSha: string;
 }) {
 	const writeClient = useGithubWrite();
 	const [mergeResult, doMerge] = useAtom(writeClient.mergePullRequest.mutate);
+	const [branchUpdateResult, doUpdateBranch] = useAtom(
+		writeClient.updatePullRequestBranch.mutate,
+	);
 	const [stateResult, doUpdateState] = useAtom(
 		writeClient.updateIssueState.mutate,
 	);
 
 	const correlationPrefix = useId();
 	const isMerging = Result.isWaiting(mergeResult);
+	const isUpdatingBranch = Result.isWaiting(branchUpdateResult);
 	const isUpdatingState = Result.isWaiting(stateResult);
 
 	// Don't show actions for already-merged PRs
@@ -625,11 +636,33 @@ function PrActionBar({
 		state === "open" &&
 		!draft &&
 		(mergeableState === "clean" || mergeableState === "unstable");
+	const canUpdateBranch = state === "open" && mergeableState === "behind";
 
 	return (
 		<Card className="mt-4 sm:mt-6">
 			<CardContent className="px-3 pt-3 sm:px-6 sm:pt-4">
 				<div className="flex flex-wrap items-center gap-2 sm:gap-3">
+					{/* Update branch button */}
+					{canUpdateBranch && (
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={isUpdatingBranch}
+							onClick={() => {
+								doUpdateBranch({
+									correlationId: `${correlationPrefix}-update-branch-${Date.now()}`,
+									ownerLogin,
+									name,
+									repositoryId,
+									number,
+									expectedHeadSha: headSha,
+								});
+							}}
+						>
+							{isUpdatingBranch ? "Updating branch..." : "Update branch"}
+						</Button>
+					)}
+
 					{/* Merge button */}
 					{state === "open" && (
 						<Button
@@ -698,6 +731,11 @@ function PrActionBar({
 				{Result.isFailure(mergeResult) && (
 					<p className="mt-2 text-sm text-destructive">
 						Merge failed. Please try again.
+					</p>
+				)}
+				{Result.isFailure(branchUpdateResult) && (
+					<p className="mt-2 text-sm text-destructive">
+						Branch update failed. Please try again.
 					</p>
 				)}
 				{Result.isFailure(stateResult) && (
@@ -982,6 +1020,33 @@ function ReviewStateBadge({ state }: { state: string }) {
 				</Badge>
 			);
 	}
+}
+
+function ReviewOptimisticBadge({
+	optimisticState,
+	optimisticErrorMessage,
+}: {
+	optimisticState: "pending" | "failed" | "confirmed" | null;
+	optimisticErrorMessage: string | null;
+}) {
+	if (optimisticState === "failed") {
+		return (
+			<Badge variant="destructive">
+				{optimisticErrorMessage ?? "GitHub rejected this review."}
+			</Badge>
+		);
+	}
+	if (optimisticState === "pending") {
+		return <Badge variant="outline">Syncing with GitHub</Badge>;
+	}
+	if (optimisticState === "confirmed") {
+		return (
+			<Badge variant="secondary" className="text-green-600">
+				Confirmed by GitHub
+			</Badge>
+		);
+	}
+	return null;
 }
 
 function CheckIcon({

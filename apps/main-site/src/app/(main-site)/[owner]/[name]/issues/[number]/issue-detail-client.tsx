@@ -16,6 +16,8 @@ import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useOnDemandSync } from "@packages/ui/rpc/on-demand-sync";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { use, useId, useMemo, useState } from "react";
+import { AssigneesCombobox } from "@/app/(main-site)/_components/assignees-combobox";
+import { LabelsCombobox } from "@/app/(main-site)/_components/labels-combobox";
 import { MarkdownBody } from "@/components/markdown-body";
 
 // ---------------------------------------------------------------------------
@@ -93,129 +95,149 @@ export function IssueDetailClient({
 	}
 
 	return (
-		<>
-			{/* Header */}
-			<div className="flex items-start gap-2 sm:gap-3">
-				<IssueStateIcon state={issue.state} />
-				<div className="min-w-0 flex-1">
-					<h1 className="text-xl sm:text-2xl font-bold break-words">
-						{issue.title}
-					</h1>
-					<div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-						<span>#{issue.number}</span>
-						<Badge
-							variant={issue.state === "open" ? "default" : "secondary"}
-							className={
-								issue.state === "open" ? "bg-green-600 hover:bg-green-700" : ""
-							}
-						>
-							{issue.state === "open" ? "Open" : "Closed"}
-						</Badge>
-						{issue.authorLogin && (
-							<span className="flex items-center gap-1">
-								<Avatar className="size-5">
-									<AvatarImage src={issue.authorAvatarUrl ?? undefined} />
-									<AvatarFallback className="text-[10px]">
-										{issue.authorLogin[0]?.toUpperCase()}
-									</AvatarFallback>
-								</Avatar>
-								<span className="font-medium text-foreground">
-									{issue.authorLogin}
-								</span>{" "}
-								opened {formatRelative(issue.githubUpdatedAt)}
-							</span>
-						)}
+		<div className="flex gap-6 sm:gap-8">
+			{/* Main content */}
+			<div className="min-w-0 flex-1">
+				{/* Header */}
+				<div className="flex items-start gap-2 sm:gap-3">
+					<IssueStateIcon state={issue.state} />
+					<div className="min-w-0 flex-1">
+						<h1 className="text-xl sm:text-2xl font-bold break-words">
+							{issue.title}
+						</h1>
+						<div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+							<span>#{issue.number}</span>
+							<Badge
+								variant={issue.state === "open" ? "default" : "secondary"}
+								className={
+									issue.state === "open"
+										? "bg-green-600 hover:bg-green-700"
+										: ""
+								}
+							>
+								{issue.state === "open" ? "Open" : "Closed"}
+							</Badge>
+							{issue.authorLogin && (
+								<span className="flex items-center gap-1">
+									<Avatar className="size-5">
+										<AvatarImage src={issue.authorAvatarUrl ?? undefined} />
+										<AvatarFallback className="text-[10px]">
+											{issue.authorLogin[0]?.toUpperCase()}
+										</AvatarFallback>
+									</Avatar>
+									<span className="font-medium text-foreground">
+										{issue.authorLogin}
+									</span>{" "}
+									opened {formatRelative(issue.githubUpdatedAt)}
+								</span>
+							)}
+						</div>
 					</div>
-					{issue.labelNames.length > 0 && (
-						<div className="mt-1.5 flex flex-wrap gap-1.5">
-							{issue.labelNames.map((label) => (
-								<Badge key={label} variant="outline" className="text-xs">
-									{label}
-								</Badge>
+				</div>
+
+				{/* Body */}
+				{issue.body && (
+					<Card className="mt-4 sm:mt-6">
+						<CardContent className="px-3 pt-4 sm:px-6 sm:pt-6">
+							<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto">
+								<MarkdownBody>{issue.body}</MarkdownBody>
+							</div>
+						</CardContent>
+					</Card>
+				)}
+
+				{/* Action bar -- close / reopen */}
+				<IssueActionBar
+					ownerLogin={owner}
+					name={name}
+					number={issueNumber}
+					repositoryId={issue.repositoryId}
+					state={issue.state}
+				/>
+
+				{/* Comments */}
+				{issue.comments.length > 0 && (
+					<div className="mt-6 sm:mt-8">
+						<h2 className="text-lg font-semibold mb-3 sm:mb-4">
+							{issue.comments.length} Comment
+							{issue.comments.length !== 1 ? "s" : ""}
+						</h2>
+						<div className="space-y-3 sm:space-y-4">
+							{issue.comments.map((comment) => (
+								<Card key={comment.githubCommentId}>
+									<CardHeader className="px-3 pb-2 sm:px-6">
+										<div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-sm">
+											{comment.authorLogin && (
+												<span className="flex items-center gap-1.5">
+													<Avatar className="size-5">
+														<AvatarImage
+															src={comment.authorAvatarUrl ?? undefined}
+														/>
+														<AvatarFallback className="text-[10px]">
+															{comment.authorLogin[0]?.toUpperCase()}
+														</AvatarFallback>
+													</Avatar>
+													<span className="font-medium">
+														{comment.authorLogin}
+													</span>
+												</span>
+											)}
+											<span className="text-xs sm:text-sm text-muted-foreground">
+												{formatRelative(comment.createdAt)}
+											</span>
+										</div>
+									</CardHeader>
+									<CardContent className="px-3 sm:px-6">
+										<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto">
+											<MarkdownBody>{comment.body}</MarkdownBody>
+										</div>
+									</CardContent>
+								</Card>
 							))}
 						</div>
-					)}
-				</div>
+					</div>
+				)}
+
+				{issue.comments.length === 0 && (
+					<p className="mt-6 sm:mt-8 text-sm text-muted-foreground">
+						No comments yet.
+					</p>
+				)}
+
+				{/* Comment form */}
+				<Separator className="mt-6 sm:mt-8" />
+				<CommentForm
+					ownerLogin={owner}
+					name={name}
+					number={issueNumber}
+					repositoryId={issue.repositoryId}
+				/>
 			</div>
 
-			{/* Body */}
-			{issue.body && (
-				<Card className="mt-4 sm:mt-6">
-					<CardContent className="px-3 pt-4 sm:px-6 sm:pt-6">
-						<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto">
-							<MarkdownBody>{issue.body}</MarkdownBody>
-						</div>
-					</CardContent>
-				</Card>
-			)}
-
-			{/* Action bar — close / reopen */}
-			<IssueActionBar
-				ownerLogin={owner}
-				name={name}
-				number={issueNumber}
-				repositoryId={issue.repositoryId}
-				state={issue.state}
-			/>
-
-			{/* Comments */}
-			{issue.comments.length > 0 && (
-				<div className="mt-6 sm:mt-8">
-					<h2 className="text-lg font-semibold mb-3 sm:mb-4">
-						{issue.comments.length} Comment
-						{issue.comments.length !== 1 ? "s" : ""}
-					</h2>
-					<div className="space-y-3 sm:space-y-4">
-						{issue.comments.map((comment) => (
-							<Card key={comment.githubCommentId}>
-								<CardHeader className="px-3 pb-2 sm:px-6">
-									<div className="flex flex-wrap items-center gap-1.5 sm:gap-2 text-sm">
-										{comment.authorLogin && (
-											<span className="flex items-center gap-1.5">
-												<Avatar className="size-5">
-													<AvatarImage
-														src={comment.authorAvatarUrl ?? undefined}
-													/>
-													<AvatarFallback className="text-[10px]">
-														{comment.authorLogin[0]?.toUpperCase()}
-													</AvatarFallback>
-												</Avatar>
-												<span className="font-medium">
-													{comment.authorLogin}
-												</span>
-											</span>
-										)}
-										<span className="text-xs sm:text-sm text-muted-foreground">
-											{formatRelative(comment.createdAt)}
-										</span>
-									</div>
-								</CardHeader>
-								<CardContent className="px-3 sm:px-6">
-									<div className="prose prose-sm dark:prose-invert max-w-none overflow-x-auto">
-										<MarkdownBody>{comment.body}</MarkdownBody>
-									</div>
-								</CardContent>
-							</Card>
-						))}
-					</div>
-				</div>
-			)}
-
-			{issue.comments.length === 0 && (
-				<p className="mt-6 sm:mt-8 text-sm text-muted-foreground">
-					No comments yet.
-				</p>
-			)}
-
-			{/* Comment form */}
-			<Separator className="mt-6 sm:mt-8" />
-			<CommentForm
-				ownerLogin={owner}
-				name={name}
-				number={issueNumber}
-				repositoryId={issue.repositoryId}
-			/>
-		</>
+			{/* Sidebar */}
+			<div className="hidden sm:block w-56 shrink-0 space-y-5 pt-1">
+				<AssigneesCombobox
+					ownerLogin={owner}
+					name={name}
+					repositoryId={issue.repositoryId}
+					number={issueNumber}
+					currentAssignees={issue.assignees}
+					optimisticOperationType={issue.optimisticOperationType}
+					optimisticState={issue.optimisticState}
+					optimisticErrorMessage={issue.optimisticErrorMessage}
+				/>
+				<LabelsCombobox
+					ownerLogin={owner}
+					name={name}
+					repositoryId={issue.repositoryId}
+					number={issueNumber}
+					currentLabels={issue.labelNames}
+					optimisticOperationType={issue.optimisticOperationType}
+					optimisticState={issue.optimisticState}
+					optimisticErrorMessage={issue.optimisticErrorMessage}
+				/>
+			</div>
+		</div>
 	);
 }
 
