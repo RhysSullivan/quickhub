@@ -129,7 +129,7 @@ export function RepoOverviewPanel({
 							className="rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted no-underline group"
 						>
 							<div className="flex items-center gap-1.5 mb-1">
-								<GitPullRequest className="size-3 text-green-500" />
+								<GitPullRequest className="size-3 text-github-open" />
 								<span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
 									PRs
 								</span>
@@ -143,7 +143,7 @@ export function RepoOverviewPanel({
 							className="rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted no-underline group"
 						>
 							<div className="flex items-center gap-1.5 mb-1">
-								<CircleDot className="size-3 text-blue-500" />
+								<CircleDot className="size-3 text-github-info" />
 								<span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
 									Issues
 								</span>
@@ -160,7 +160,7 @@ export function RepoOverviewPanel({
 					<div className="mb-6">
 						<div className="flex items-center justify-between mb-2">
 							<div className="flex items-center gap-1.5">
-								<GitPullRequest className="size-3.5 text-green-500" />
+								<GitPullRequest className="size-3.5 text-github-open" />
 								<h2 className="text-xs font-semibold text-foreground">
 									Open Pull Requests
 								</h2>
@@ -221,7 +221,7 @@ export function RepoOverviewPanel({
 					<div className="mb-6">
 						<div className="flex items-center justify-between mb-2">
 							<div className="flex items-center gap-1.5">
-								<CircleDot className="size-3.5 text-blue-500" />
+								<CircleDot className="size-3.5 text-github-info" />
 								<h2 className="text-xs font-semibold text-foreground">
 									Open Issues
 								</h2>
@@ -306,7 +306,7 @@ function PrStateIcon({
 	if (state === "open")
 		return (
 			<svg
-				className="mt-0.5 size-3.5 text-green-600 shrink-0"
+				className="mt-0.5 size-3.5 text-github-open shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -315,7 +315,7 @@ function PrStateIcon({
 		);
 	return (
 		<svg
-			className="mt-0.5 size-3.5 text-purple-600 shrink-0"
+			className="mt-0.5 size-3.5 text-github-merged shrink-0"
 			viewBox="0 0 16 16"
 			fill="currentColor"
 		>
@@ -328,7 +328,7 @@ function IssueStateIcon({ state }: { state: "open" | "closed" }) {
 	if (state === "open")
 		return (
 			<svg
-				className="mt-0.5 size-3.5 text-green-600 shrink-0"
+				className="mt-0.5 size-3.5 text-github-open shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -338,7 +338,7 @@ function IssueStateIcon({ state }: { state: "open" | "closed" }) {
 		);
 	return (
 		<svg
-			className="mt-0.5 size-3.5 text-purple-600 shrink-0"
+			className="mt-0.5 size-3.5 text-github-merged shrink-0"
 			viewBox="0 0 16 16"
 			fill="currentColor"
 		>
@@ -352,7 +352,7 @@ function CheckDot({ conclusion }: { conclusion: string }) {
 	if (conclusion === "success")
 		return (
 			<svg
-				className="size-3 text-green-600 shrink-0 mt-0.5"
+				className="size-3 text-github-open shrink-0 mt-0.5"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -362,7 +362,7 @@ function CheckDot({ conclusion }: { conclusion: string }) {
 	if (conclusion === "failure")
 		return (
 			<svg
-				className="size-3 text-red-600 shrink-0 mt-0.5"
+				className="size-3 text-github-closed shrink-0 mt-0.5"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -371,7 +371,7 @@ function CheckDot({ conclusion }: { conclusion: string }) {
 		);
 	return (
 		<svg
-			className="size-3 text-yellow-600 shrink-0 mt-0.5"
+			className="size-3 text-github-warning shrink-0 mt-0.5"
 			viewBox="0 0 16 16"
 			fill="currentColor"
 		>

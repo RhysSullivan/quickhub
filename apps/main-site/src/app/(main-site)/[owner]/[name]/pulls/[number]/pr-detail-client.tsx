@@ -218,7 +218,9 @@ export function PullRequestDetailClient({
 															: "outline"
 												}
 												className={`shrink-0 ${
-													check.conclusion === "success" ? "text-green-600" : ""
+													check.conclusion === "success"
+														? "text-github-open"
+														: ""
 												}`}
 											>
 												{check.conclusion}
@@ -414,10 +416,12 @@ export function FilesChangedClient({
 						<span className="ml-2 text-sm font-normal text-muted-foreground">
 							{files.length} file{files.length !== 1 ? "s" : ""}
 							{totalAdditions > 0 && (
-								<span className="text-green-600 ml-2">+{totalAdditions}</span>
+								<span className="text-github-open ml-2">+{totalAdditions}</span>
 							)}
 							{totalDeletions > 0 && (
-								<span className="text-red-600 ml-1">-{totalDeletions}</span>
+								<span className="text-github-closed ml-1">
+									-{totalDeletions}
+								</span>
 							)}
 						</span>
 					)}
@@ -460,8 +464,8 @@ export function FilesChangedClient({
 									{entry.filename}
 								</span>
 								<span className="ml-auto flex gap-2 shrink-0">
-									<span className="text-green-600">+{entry.additions}</span>
-									<span className="text-red-600">-{entry.deletions}</span>
+									<span className="text-github-open">+{entry.additions}</span>
+									<span className="text-github-closed">-{entry.deletions}</span>
 								</span>
 							</div>
 							<div className="overflow-x-auto rounded-b-lg border">
@@ -493,10 +497,12 @@ export function FilesChangedClient({
 									<span className="font-mono truncate min-w-0">
 										{f.filename}
 									</span>
-									<span className="shrink-0 text-green-600">
+									<span className="shrink-0 text-github-open">
 										+{f.additions}
 									</span>
-									<span className="shrink-0 text-red-600">-{f.deletions}</span>
+									<span className="shrink-0 text-github-closed">
+										-{f.deletions}
+									</span>
 								</div>
 							))}
 					</div>
@@ -568,7 +574,7 @@ function CommentForm({
 						</p>
 					)}
 					{Result.isSuccess(commentResult) && body === "" && (
-						<p className="text-sm text-green-600">Comment submitted!</p>
+						<p className="text-sm text-github-open">Comment submitted!</p>
 					)}
 				</div>
 				<Button
@@ -671,7 +677,9 @@ function PrActionBar({
 								});
 							}}
 							className={
-								isMergeable ? "bg-green-600 hover:bg-green-700 text-white" : ""
+								isMergeable
+									? "bg-github-open hover:bg-github-open/90 text-primary-foreground"
+									: ""
 							}
 						>
 							{isMerging ? "Merging..." : "Merge pull request"}
@@ -835,37 +843,31 @@ function FileStatusBadge({
 	const config = {
 		added: {
 			label: "A",
-			className:
-				"bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+			className: "bg-github-open/15 text-github-open",
 		},
 		removed: {
 			label: "D",
-			className: "bg-red-100 text-red-800 dark:bg-red-900 dark:text-red-200",
+			className: "bg-github-closed/15 text-github-closed",
 		},
 		modified: {
 			label: "M",
-			className:
-				"bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+			className: "bg-github-warning/15 text-github-warning",
 		},
 		renamed: {
 			label: "R",
-			className:
-				"bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+			className: "bg-github-info/15 text-github-info",
 		},
 		copied: {
 			label: "C",
-			className:
-				"bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+			className: "bg-github-info/15 text-github-info",
 		},
 		changed: {
 			label: "T",
-			className:
-				"bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200",
+			className: "bg-github-warning/15 text-github-warning",
 		},
 		unchanged: {
 			label: "U",
-			className:
-				"bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200",
+			className: "bg-muted text-muted-foreground",
 		},
 	}[status];
 
@@ -899,7 +901,7 @@ function PrStateIcon({
 	if (state === "open") {
 		return (
 			<svg
-				className="mt-1.5 size-5 text-green-600 shrink-0"
+				className="mt-1.5 size-5 text-github-open shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -909,7 +911,7 @@ function PrStateIcon({
 	}
 	return (
 		<svg
-			className="mt-1.5 size-5 text-purple-600 shrink-0"
+			className="mt-1.5 size-5 text-github-merged shrink-0"
 			viewBox="0 0 16 16"
 			fill="currentColor"
 		>
@@ -928,13 +930,19 @@ function PrStateBadge({
 	mergedAt: number | null;
 }) {
 	if (mergedAt !== null) {
-		return <Badge className="bg-purple-600 hover:bg-purple-700">Merged</Badge>;
+		return (
+			<Badge className="bg-github-merged hover:bg-github-merged/90">
+				Merged
+			</Badge>
+		);
 	}
 	if (draft) {
 		return <Badge variant="outline">Draft</Badge>;
 	}
 	if (state === "open") {
-		return <Badge className="bg-green-600 hover:bg-green-700">Open</Badge>;
+		return (
+			<Badge className="bg-github-open hover:bg-github-open/90">Open</Badge>
+		);
 	}
 	return <Badge variant="secondary">Closed</Badge>;
 }
@@ -943,7 +951,7 @@ function MergeableStateBadge({ state }: { state: string }) {
 	switch (state) {
 		case "clean":
 			return (
-				<Badge variant="secondary" className="text-green-600 text-xs">
+				<Badge variant="secondary" className="text-github-open text-xs">
 					Ready to merge
 				</Badge>
 			);
@@ -961,7 +969,7 @@ function MergeableStateBadge({ state }: { state: string }) {
 			);
 		case "unstable":
 			return (
-				<Badge variant="outline" className="text-xs text-yellow-600">
+				<Badge variant="outline" className="text-xs text-github-warning">
 					Unstable
 				</Badge>
 			);
@@ -978,7 +986,7 @@ function ReviewStateBadge({ state }: { state: string }) {
 	switch (state) {
 		case "APPROVED":
 			return (
-				<Badge variant="secondary" className="text-green-600 text-xs">
+				<Badge variant="secondary" className="text-github-open text-xs">
 					Approved
 				</Badge>
 			);
@@ -1034,7 +1042,7 @@ function ReviewOptimisticBadge({
 	}
 	if (optimisticState === "confirmed") {
 		return (
-			<Badge variant="secondary" className="text-green-600">
+			<Badge variant="secondary" className="text-github-open">
 				Confirmed by GitHub
 			</Badge>
 		);
@@ -1052,7 +1060,7 @@ function CheckIcon({
 	if (conclusion === "success") {
 		return (
 			<svg
-				className="size-4 text-green-600"
+				className="size-4 text-github-open"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -1063,7 +1071,7 @@ function CheckIcon({
 	if (conclusion === "failure") {
 		return (
 			<svg
-				className="size-4 text-red-600"
+				className="size-4 text-github-closed"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -1074,7 +1082,7 @@ function CheckIcon({
 	if (status === "in_progress") {
 		return (
 			<svg
-				className="size-4 text-yellow-500 animate-spin"
+				className="size-4 text-github-warning animate-spin"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>

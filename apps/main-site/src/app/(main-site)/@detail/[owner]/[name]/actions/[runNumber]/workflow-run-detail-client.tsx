@@ -837,15 +837,13 @@ function ControlButton({
 
 	const variantClasses = {
 		primary: cn(
-			"border-orange-500/30 bg-orange-500/10 text-orange-600 hover:bg-orange-500/20 hover:border-orange-500/50",
-			"dark:border-orange-400/30 dark:bg-orange-400/10 dark:text-orange-400 dark:hover:bg-orange-400/20",
+			"border-github-warning/30 bg-github-warning/10 text-github-warning hover:bg-github-warning/20 hover:border-github-warning/50",
 		),
 		secondary: cn(
 			"border-border bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground",
 		),
 		destructive: cn(
-			"border-red-500/30 bg-red-500/10 text-red-600 hover:bg-red-500/20 hover:border-red-500/50",
-			"dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-400 dark:hover:bg-red-400/20",
+			"border-github-closed/30 bg-github-closed/10 text-github-closed hover:bg-github-closed/20 hover:border-github-closed/50",
 		),
 	};
 
@@ -868,9 +866,9 @@ function ControlButton({
 						"h-7 gap-1.5 px-2.5 text-[11px] font-medium transition-all duration-200",
 						variantClasses[variant],
 						state === "success" &&
-							"border-green-500/30 bg-green-500/10 text-green-600 dark:border-green-400/30 dark:bg-green-400/10 dark:text-green-400",
+							"border-github-open/30 bg-github-open/10 text-github-open",
 						state === "error" &&
-							"border-red-500/30 bg-red-500/10 text-red-600 dark:border-red-400/30 dark:bg-red-400/10 dark:text-red-400",
+							"border-github-closed/30 bg-github-closed/10 text-github-closed",
 						isDisabled && "pointer-events-none opacity-60",
 					)}
 					disabled={isDisabled}
@@ -953,12 +951,12 @@ function RunConclusionIconLarge({
 }) {
 	if (status === "in_progress" || status === "queued")
 		return (
-			<div className="mt-1 size-5 rounded-full border-2 border-yellow-500 border-t-transparent animate-spin shrink-0" />
+			<div className="mt-1 size-5 rounded-full border-2 border-github-warning border-t-transparent animate-spin shrink-0" />
 		);
 	if (conclusion === "success")
 		return (
 			<svg
-				className="mt-1 size-5 text-green-600 shrink-0"
+				className="mt-1 size-5 text-github-open shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -968,7 +966,7 @@ function RunConclusionIconLarge({
 	if (conclusion === "failure")
 		return (
 			<svg
-				className="mt-1 size-5 text-red-600 shrink-0"
+				className="mt-1 size-5 text-github-closed shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -993,7 +991,7 @@ function RunStatusBadge({
 }) {
 	if (status === "in_progress")
 		return (
-			<Badge className="bg-yellow-600 hover:bg-yellow-700 text-[10px]">
+			<Badge className="bg-github-warning hover:bg-github-warning/90 text-[10px]">
 				In Progress
 			</Badge>
 		);
@@ -1005,7 +1003,7 @@ function RunStatusBadge({
 		);
 	if (conclusion === "success")
 		return (
-			<Badge className="bg-green-600 hover:bg-green-700 text-[10px]">
+			<Badge className="bg-github-open hover:bg-github-open/90 text-[10px]">
 				Success
 			</Badge>
 		);
@@ -1031,7 +1029,7 @@ function RunStatusBadge({
 function ConclusionBadge({ conclusion }: { conclusion: string }) {
 	if (conclusion === "success")
 		return (
-			<Badge variant="secondary" className={cn("text-[10px] text-green-600")}>
+			<Badge variant="secondary" className={cn("text-[10px] text-github-open")}>
 				{conclusion}
 			</Badge>
 		);
@@ -1057,12 +1055,12 @@ function JobConclusionIcon({
 }) {
 	if (status === "in_progress")
 		return (
-			<div className="size-4 rounded-full border-2 border-yellow-500 border-t-transparent animate-spin shrink-0" />
+			<div className="size-4 rounded-full border-2 border-github-warning border-t-transparent animate-spin shrink-0" />
 		);
 	if (conclusion === "success")
 		return (
 			<svg
-				className="size-4 text-green-600 shrink-0"
+				className="size-4 text-github-open shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -1072,7 +1070,7 @@ function JobConclusionIcon({
 	if (conclusion === "failure")
 		return (
 			<svg
-				className="size-4 text-red-600 shrink-0"
+				className="size-4 text-github-closed shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -1092,7 +1090,7 @@ function StepConclusionIcon({ conclusion }: { conclusion: string | null }) {
 	if (conclusion === "success")
 		return (
 			<svg
-				className="size-3 text-green-600 shrink-0"
+				className="size-3 text-github-open shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>
@@ -1102,7 +1100,7 @@ function StepConclusionIcon({ conclusion }: { conclusion: string | null }) {
 	if (conclusion === "failure")
 		return (
 			<svg
-				className="size-3 text-red-600 shrink-0"
+				className="size-3 text-github-closed shrink-0"
 				viewBox="0 0 16 16"
 				fill="currentColor"
 			>

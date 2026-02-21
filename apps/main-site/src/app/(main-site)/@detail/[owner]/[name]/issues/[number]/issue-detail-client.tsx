@@ -421,7 +421,7 @@ function CommentForm({
 						<p className="text-xs text-destructive">Failed to submit.</p>
 					)}
 					{Result.isSuccess(commentResult) && body === "" && (
-						<p className="text-xs text-green-600">Submitted!</p>
+						<p className="text-xs text-github-open">Submitted!</p>
 					)}
 				</div>
 				<Button
@@ -440,8 +440,8 @@ function CommentForm({
 
 function IssueStateIconLarge({ state }: { state: "open" | "closed" }) {
 	if (state === "open")
-		return <CircleDot className="mt-1 size-5 text-green-600 shrink-0" />;
-	return <CheckCircle2 className="mt-1 size-5 text-purple-600 shrink-0" />;
+		return <CircleDot className="mt-1 size-5 text-github-open shrink-0" />;
+	return <CheckCircle2 className="mt-1 size-5 text-github-merged shrink-0" />;
 }
 
 function IssueStateBadge({
@@ -453,7 +453,7 @@ function IssueStateBadge({
 }) {
 	if (state === "open")
 		return (
-			<Badge className="bg-green-600 hover:bg-green-700 text-[10px]">
+			<Badge className="bg-github-open hover:bg-github-open/90 text-[10px]">
 				Open
 			</Badge>
 		);
