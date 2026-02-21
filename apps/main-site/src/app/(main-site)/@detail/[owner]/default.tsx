@@ -14,12 +14,24 @@ import {
 
 /**
  * Detail panel for the org overview page (/:owner).
- * Shows the home dashboard scoped to this org.
+ * Sync parent renders immediately; async child resolves params inside Suspense.
  */
-export default async function OrgDetailDefault(props: {
+export default function OrgDetailDefault(props: {
 	params: Promise<{ owner: string }>;
 }) {
-	const { owner } = await props.params;
+	return (
+		<Suspense fallback={<OrgDashboardSkeleton />}>
+			<OrgDetailContent paramsPromise={props.params} />
+		</Suspense>
+	);
+}
+
+async function OrgDetailContent({
+	paramsPromise,
+}: {
+	paramsPromise: Promise<{ owner: string }>;
+}) {
+	const { owner } = await paramsPromise;
 
 	return (
 		<div className="h-full overflow-y-auto bg-dotgrid">
@@ -97,8 +109,25 @@ async function OrgReposColumnSection({ owner }: { owner: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Skeleton
+// Skeletons
 // ---------------------------------------------------------------------------
+
+function OrgDashboardSkeleton() {
+	return (
+		<div className="h-full overflow-y-auto bg-dotgrid">
+			<div className="mx-auto max-w-[1600px] px-4 py-4 md:px-6 md:py-5">
+				<div className="mb-4">
+					<Skeleton className="h-10 w-full rounded-lg" />
+				</div>
+				<div className="grid gap-4 lg:grid-cols-3">
+					<ColumnSkeleton />
+					<ColumnSkeleton />
+					<ColumnSkeleton />
+				</div>
+			</div>
+		</div>
+	);
+}
 
 function ColumnSkeleton() {
 	return (

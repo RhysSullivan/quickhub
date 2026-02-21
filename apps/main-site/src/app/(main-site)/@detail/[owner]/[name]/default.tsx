@@ -11,14 +11,27 @@ import {
 
 /**
  * Detail panel for the repo overview page (/:owner/:name).
- * Each data section gets its own async server component + Suspense boundary.
+ * Sync parent renders immediately; the async child resolves params
+ * inside Suspense so the server can flush the outer shell first.
  */
-export default async function RepoDetailDefault({
+export default function RepoDetailDefault({
 	params,
 }: {
 	params: Promise<{ owner: string; name: string }>;
 }) {
-	const { owner, name } = await params;
+	return (
+		<Suspense fallback={<RepoOverviewSkeleton />}>
+			<RepoDetailContent paramsPromise={params} />
+		</Suspense>
+	);
+}
+
+async function RepoDetailContent({
+	paramsPromise,
+}: {
+	paramsPromise: Promise<{ owner: string; name: string }>;
+}) {
+	const { owner, name } = await paramsPromise;
 
 	return (
 		<SyncProgressOverlay owner={owner} name={name}>
@@ -100,6 +113,18 @@ async function RecentIssuesContent({
 // ---------------------------------------------------------------------------
 // Skeletons
 // ---------------------------------------------------------------------------
+
+function RepoOverviewSkeleton() {
+	return (
+		<div className="h-full overflow-y-auto">
+			<div className="px-6 py-8">
+				<OverviewHeaderSkeleton />
+				<PrsSkeleton />
+				<IssuesSkeleton />
+			</div>
+		</div>
+	);
+}
 
 function OverviewHeaderSkeleton() {
 	return (
