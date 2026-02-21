@@ -6,11 +6,11 @@ import {
 	AvatarImage,
 } from "@packages/ui/components/avatar";
 import { Button } from "@packages/ui/components/button";
+import { Loader2 } from "@packages/ui/components/icons";
 import { Link } from "@packages/ui/components/link";
 import { useInfinitePaginationWithInitial } from "@packages/ui/hooks/use-paginated-atom";
 import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
-import { Loader2 } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useMemo, useState } from "react";
 

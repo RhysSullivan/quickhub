@@ -30,10 +30,12 @@ const GLOBAL_SHORTCUTS = [
 ] as const;
 
 const DETAIL_SHORTCUTS = [
+	{ keys: ["j"], description: "Focus next file in diff" },
+	{ keys: ["k"], description: "Focus previous file in diff" },
 	{ keys: ["shift", "d"], description: "Toggle split/unified diff" },
 	{ keys: ["shift", "f"], description: "Focus file filter in PR diff" },
-	{ keys: ["["], description: "Focus previous file in diff" },
-	{ keys: ["]"], description: "Focus next file in diff" },
+	{ keys: ["["], description: "Toggle left sidebar" },
+	{ keys: ["]"], description: "Toggle right sidebar" },
 ] as const;
 
 function Kbd({ children }: { children: string }) {

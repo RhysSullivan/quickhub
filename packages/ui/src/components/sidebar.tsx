@@ -1,6 +1,7 @@
 "use client";
 
 import { Button } from "@packages/ui/components/button";
+import { PanelLeftIcon } from "@packages/ui/components/icons";
 import { Input } from "@packages/ui/components/input";
 import { Separator } from "@packages/ui/components/separator";
 import {
@@ -22,7 +23,6 @@ import { cn } from "@packages/ui/lib/utils";
 import { Slot } from "@radix-ui/react-slot";
 import { useHotkey } from "@tanstack/react-hotkeys";
 import { cva, type VariantProps } from "class-variance-authority";
-import { PanelLeftIcon } from "lucide-react";
 import * as React from "react";
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";

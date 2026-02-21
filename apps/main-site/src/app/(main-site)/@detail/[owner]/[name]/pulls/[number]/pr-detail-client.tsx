@@ -9,6 +9,19 @@ import {
 } from "@packages/ui/components/avatar";
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
+import {
+	ArrowDown,
+	ArrowUp,
+	ChevronDown,
+	ChevronsDown,
+	ChevronsUp,
+	Columns2,
+	ExternalLink,
+	FolderOpen,
+	MessageSquare,
+	Rows3,
+	Search,
+} from "@packages/ui/components/icons";
 import { Input } from "@packages/ui/components/input";
 import { Kbd } from "@packages/ui/components/kbd";
 import { Link } from "@packages/ui/components/link";
@@ -34,19 +47,6 @@ import {
 import { useHotkey } from "@tanstack/react-hotkeys";
 import { Option } from "effect";
 import {
-	ArrowDown,
-	ArrowUp,
-	ChevronDown,
-	ChevronsDown,
-	ChevronsUp,
-	Columns2,
-	ExternalLink,
-	FolderOpen,
-	MessageSquare,
-	Rows3,
-	Search,
-} from "lucide-react";
-import {
 	forwardRef,
 	type ReactElement,
 	useCallback,
@@ -58,7 +58,6 @@ import {
 	useState,
 } from "react";
 import { AssigneesCombobox } from "@/app/(main-site)/_components/assignees-combobox";
-import { useHubSidebar } from "@/app/(main-site)/_components/hub-shell";
 import { LabelsCombobox } from "@/app/(main-site)/_components/labels-combobox";
 import { MarkdownBody } from "@/components/markdown-body";
 
@@ -538,13 +537,6 @@ export function PrDetailClient({
 			),
 		[filesData.files, pr?.reviewComments],
 	);
-
-	const { toggleSidebar } = useHubSidebar();
-
-	useHotkey("[", (event) => {
-		event.preventDefault();
-		toggleSidebar();
-	});
 
 	useHotkey("]", (event) => {
 		event.preventDefault();
@@ -1743,7 +1735,7 @@ const DiffPanel = forwardRef<
 
 											{/* Right side: comment count + stats */}
 											<div className="ml-auto flex items-center gap-2.5 shrink-0">
-												{hasCollapsedContext && (
+												{hasCollapsedContext && fullContextFiles === null && (
 													<Button
 														variant="ghost"
 														size="sm"
@@ -1751,15 +1743,11 @@ const DiffPanel = forwardRef<
 														onClick={() =>
 															void loadFullContextForFile(entry.filename)
 														}
-														disabled={
-															isLoadingFullContext || fullContextFiles !== null
-														}
+														disabled={isLoadingFullContext}
 													>
-														{fullContextFiles !== null
-															? "Context loaded"
-															: isLoadingFullContext
-																? "Loading context..."
-																: "Load context"}
+														{isLoadingFullContext
+															? "Loading context..."
+															: "Load context"}
 													</Button>
 												)}
 												{entry.reviewComments.length > 0 && (
@@ -2873,16 +2861,6 @@ function InfoSidebar({
 					)}
 				</>
 			)}
-
-			{/* ── Add comment ── */}
-			<SidebarSection>
-				<CommentForm
-					ownerLogin={owner}
-					name={name}
-					number={prNumber}
-					repositoryId={pr.repositoryId}
-				/>
-			</SidebarSection>
 		</div>
 	);
 }
@@ -3076,81 +3054,6 @@ function PrActionBar({
 					{Result.isFailure(stateResult) && "State update failed."}
 				</p>
 			)}
-		</div>
-	);
-}
-
-// ---------------------------------------------------------------------------
-// Comment form
-// ---------------------------------------------------------------------------
-
-function CommentForm({
-	ownerLogin,
-	name,
-	number,
-	repositoryId,
-}: {
-	ownerLogin: string;
-	name: string;
-	number: number;
-	repositoryId: number;
-}) {
-	const writeClient = useGithubWrite();
-	const [commentResult, submitComment] = useAtom(
-		writeClient.createComment.mutate,
-		{ mode: "promise" },
-	);
-	const [body, setBody] = useState("");
-	const correlationPrefix = useId();
-	const isSubmitting = Result.isWaiting(commentResult);
-
-	const handleSubmit = async () => {
-		const trimmedBody = body.trim();
-		if (trimmedBody.length === 0) return;
-		try {
-			await submitComment({
-				correlationId: `${correlationPrefix}-comment-${Date.now()}`,
-				ownerLogin,
-				name,
-				repositoryId,
-				number,
-				body: trimmedBody,
-			});
-			setBody("");
-		} catch {
-			// Error is captured in commentResult for display
-		}
-	};
-
-	return (
-		<div>
-			<SidebarHeading>Add comment</SidebarHeading>
-			<Textarea
-				placeholder="Leave a comment..."
-				value={body}
-				onChange={(e) => setBody(e.target.value)}
-				rows={3}
-				disabled={isSubmitting}
-				className="text-xs resize-none"
-			/>
-			<div className="flex items-center justify-between mt-2">
-				<div>
-					{Result.isFailure(commentResult) && (
-						<p className="text-xs text-destructive">Failed to submit.</p>
-					)}
-					{Result.isSuccess(commentResult) && body === "" && (
-						<p className="text-xs text-green-600">Comment sent.</p>
-					)}
-				</div>
-				<Button
-					size="sm"
-					disabled={body.trim().length === 0 || isSubmitting}
-					className="h-8 text-xs"
-					onClick={handleSubmit}
-				>
-					{isSubmitting ? "Sending..." : "Comment"}
-				</Button>
-			</div>
 		</div>
 	);
 }
@@ -3509,31 +3412,33 @@ function ReviewerChip({
 		.join(" \u00B7 ");
 
 	return (
-		<TooltipTrigger asChild>
-			<div className="relative inline-flex shrink-0">
-				<Avatar className="size-6">
-					<AvatarImage src={review.authorAvatarUrl ?? undefined} />
-					<AvatarFallback className="text-[10px]">
-						{(review.authorLogin ?? "?")[0]?.toUpperCase()}
-					</AvatarFallback>
-				</Avatar>
-				{/* Status dot */}
-				<span
-					className={cn(
-						"absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-background",
-						config.dotClass,
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<div className="relative inline-flex shrink-0">
+					<Avatar className="size-6">
+						<AvatarImage src={review.authorAvatarUrl ?? undefined} />
+						<AvatarFallback className="text-[10px]">
+							{(review.authorLogin ?? "?")[0]?.toUpperCase()}
+						</AvatarFallback>
+					</Avatar>
+					{/* Status dot */}
+					<span
+						className={cn(
+							"absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-background",
+							config.dotClass,
+						)}
+					/>
+					{/* Optimistic indicator */}
+					{review.optimisticState === "pending" && (
+						<span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-yellow-500 ring-1 ring-background animate-pulse" />
 					)}
-				/>
-				{/* Optimistic indicator */}
-				{review.optimisticState === "pending" && (
-					<span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-yellow-500 ring-1 ring-background animate-pulse" />
-				)}
-				{review.optimisticState === "failed" && (
-					<span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-red-500 ring-1 ring-background" />
-				)}
-				<TooltipContent>{tooltipLabel}</TooltipContent>
-			</div>
-		</TooltipTrigger>
+					{review.optimisticState === "failed" && (
+						<span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-red-500 ring-1 ring-background" />
+					)}
+				</div>
+			</TooltipTrigger>
+			<TooltipContent>{tooltipLabel}</TooltipContent>
+		</Tooltip>
 	);
 }
 

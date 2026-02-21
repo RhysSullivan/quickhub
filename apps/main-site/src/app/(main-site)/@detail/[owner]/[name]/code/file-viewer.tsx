@@ -1,6 +1,6 @@
 import { api } from "@packages/database/convex/_generated/api";
+import { File } from "@packages/ui/components/icons";
 import { Either, Schema } from "effect";
-import { File } from "lucide-react";
 import { fetchAuthAction, fetchAuthMutation } from "@/lib/auth-server";
 import { FileViewerMonaco } from "./file-viewer-monaco";
 

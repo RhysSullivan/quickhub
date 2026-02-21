@@ -1,5 +1,119 @@
+import {
+	AlertIcon,
+	ArrowBothIcon,
+	ArrowLeftIcon,
+	ArrowRightIcon,
+	CalendarIcon,
+	CheckCircleFillIcon,
+	CheckIcon,
+	ChevronDownIcon,
+	ChevronLeftIcon,
+	ChevronRightIcon,
+	ChevronUpIcon,
+	CircleIcon,
+	CommentIcon,
+	CopyIcon,
+	DashIcon,
+	DeviceDesktopIcon,
+	DotFillIcon,
+	DownloadIcon,
+	FileDirectoryIcon,
+	FileIcon,
+	GitPullRequestIcon,
+	GrabberIcon,
+	HomeIcon,
+	KebabHorizontalIcon,
+	MoonIcon,
+	OrganizationIcon,
+	PlayIcon,
+	PlusIcon,
+	SearchIcon,
+	SidebarExpandIcon,
+	SignOutIcon,
+	SunIcon,
+	SyncIcon,
+	TagIcon,
+	WrapIcon,
+	XIcon,
+} from "@primer/octicons-react";
 import { cva, type VariantProps } from "class-variance-authority";
 import type * as React from "react";
+
+const AlertTriangle = AlertIcon;
+const ArrowLeft = ArrowLeftIcon;
+const ArrowRight = ArrowRightIcon;
+const ArrowDown = ChevronDownIcon;
+const ArrowUp = ChevronUpIcon;
+const Check = CheckIcon;
+const CheckCircle2 = CheckCircleFillIcon;
+const ChevronDown = ChevronDownIcon;
+const ChevronLeft = ChevronLeftIcon;
+const ChevronRight = ChevronRightIcon;
+const ChevronsDown = ArrowBothIcon;
+const ChevronsUp = ArrowBothIcon;
+const ChevronsUpDown = ArrowBothIcon;
+const Bell = CircleIcon;
+const CircleDot = DotFillIcon;
+const Copy = CopyIcon;
+const Download = DownloadIcon;
+const FileText = FileIcon;
+const File = FileIcon;
+const FileCode2 = FileIcon;
+const Folder = FileDirectoryIcon;
+const FolderOpen = FileDirectoryIcon;
+const Activity = SyncIcon;
+const GitBranch = GitPullRequestIcon;
+const GitPullRequest = GitPullRequestIcon;
+const GitCommit = GitPullRequestIcon;
+const MessageSquare = CommentIcon;
+const Eye = SearchIcon;
+const User = OrganizationIcon;
+const GripVerticalIcon = GrabberIcon;
+const Home = HomeIcon;
+const Loader2 = SyncIcon;
+const Loader2Icon = SyncIcon;
+const MoreHorizontalIcon = KebabHorizontalIcon;
+const CircleCheckIcon = CheckCircleFillIcon;
+const Ban = AlertIcon;
+const Clock = CalendarIcon;
+const Clock3 = CalendarIcon;
+const InfoIcon = AlertIcon;
+const Info = AlertIcon;
+const OctagonXIcon = XIcon;
+const RotateCcw = SyncIcon;
+const ExternalLink = (props: React.SVGProps<SVGSVGElement>) => (
+	<ExternalLinkIcon {...props} />
+);
+const FileDiff = FileIcon;
+const Rows3 = FileDirectoryIcon;
+const Columns2 = FileDirectoryIcon;
+const Package = FileDirectoryIcon;
+const ShieldAlert = AlertIcon;
+const ShieldCheck = CheckCircleFillIcon;
+const Rocket = PlayIcon;
+const TriangleAlert = AlertIcon;
+const ListChecks = CheckIcon;
+const Inbox = Folder;
+const AlertCircle = AlertIcon;
+const GitCommitHorizontal = GitPullRequestIcon;
+const Zap = SyncIcon;
+const TriangleAlertIcon = AlertIcon;
+const LogOut = SignOutIcon;
+const MessageCircle = CommentIcon;
+const Monitor = DeviceDesktopIcon;
+const Moon = MoonIcon;
+const MinusIcon = DashIcon;
+const MoreHorizontal = KebabHorizontalIcon;
+const PanelLeftIcon = SidebarExpandIcon;
+const Play = PlayIcon;
+const RefreshCw = SyncIcon;
+const Search = SearchIcon;
+const Sun = SunIcon;
+const Plus = PlusIcon;
+const Tag = TagIcon;
+const Users = OrganizationIcon;
+const WrapText = WrapIcon;
+const X = XIcon;
 
 const GitHubIcon = (props: React.SVGProps<SVGSVGElement>) => (
 	<svg fill="currentColor" viewBox="0 0 24 24" {...props}>
@@ -47,7 +161,10 @@ function DiscordIcon(
 	);
 }
 
-const ExternalLinkIcon = () => {
+const ExternalLinkIcon = (
+	props: React.SVGProps<SVGSVGElement> & { className?: string },
+) => {
+	const { className, ...rest } = props;
 	return (
 		<svg
 			xmlns="http://www.w3.org/2000/svg"
@@ -55,7 +172,8 @@ const ExternalLinkIcon = () => {
 			viewBox="0 0 24 24"
 			strokeWidth={1.5}
 			stroke="currentColor"
-			className="h-4 w-4"
+			className={className ?? "h-4 w-4"}
+			{...rest}
 		>
 			<path
 				strokeLinecap="round"
@@ -85,4 +203,99 @@ const CloseIcon = () => {
 	);
 };
 
-export { CloseIcon, DiscordIcon, ExternalLinkIcon, GitHubIcon };
+export {
+	AlertTriangle,
+	Activity,
+	AlertCircle,
+	ArrowDown,
+	ArrowLeft,
+	ArrowLeftIcon,
+	ArrowRight,
+	ArrowRightIcon,
+	ArrowUp,
+	Ban,
+	Bell,
+	CalendarIcon,
+	Check,
+	CheckCircle2,
+	CheckIcon,
+	ChevronDown,
+	ChevronDownIcon,
+	ChevronLeft,
+	ChevronLeftIcon,
+	ChevronRight,
+	ChevronRightIcon,
+	ChevronsDown,
+	ChevronsUp,
+	ChevronsUpDown,
+	Columns2,
+	CircleCheckIcon,
+	CircleDot,
+	CircleIcon,
+	Clock,
+	Clock3,
+	CloseIcon,
+	Copy,
+	CopyIcon,
+	DiscordIcon,
+	Download,
+	ExternalLink,
+	ExternalLinkIcon,
+	File,
+	FileCode2,
+	FileDiff,
+	FileText,
+	Folder,
+	FolderOpen,
+	GitBranch,
+	GitHubIcon,
+	GitCommit,
+	GitCommitHorizontal,
+	GitPullRequest,
+	GripVerticalIcon,
+	Home,
+	HomeIcon,
+	Info,
+	InfoIcon,
+	Inbox,
+	ListChecks,
+	LogOut,
+	MessageCircle,
+	MessageSquare,
+	MoreHorizontal,
+	MoreHorizontalIcon,
+	Moon,
+	MoonIcon,
+	Monitor,
+	MinusIcon,
+	OctagonXIcon,
+	Eye,
+	Package,
+	PanelLeftIcon,
+	Play,
+	Plus,
+	PlusIcon,
+	RefreshCw,
+	RotateCcw,
+	Rows3,
+	Search,
+	SearchIcon,
+	ShieldAlert,
+	ShieldCheck,
+	Sun,
+	SunIcon,
+	Tag,
+	TagIcon,
+	TriangleAlert,
+	TriangleAlertIcon,
+	User,
+	Users,
+	WrapText,
+	X,
+	XIcon,
+	Rocket,
+	Zap,
+	Loader2,
+	Loader2Icon,
+	ChevronUpIcon,
+};

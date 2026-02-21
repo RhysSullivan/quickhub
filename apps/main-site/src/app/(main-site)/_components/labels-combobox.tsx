@@ -10,6 +10,7 @@ import {
 	CommandItem,
 	CommandList,
 } from "@packages/ui/components/command";
+import { Check, ChevronsUpDown, Tag, X } from "@packages/ui/components/icons";
 import {
 	Popover,
 	PopoverContent,
@@ -19,7 +20,6 @@ import { cn } from "@packages/ui/lib/utils";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Option } from "effect";
-import { Check, ChevronsUpDown, Tag, X } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 export function LabelsCombobox({

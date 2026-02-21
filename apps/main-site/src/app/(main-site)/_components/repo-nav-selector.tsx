@@ -100,14 +100,14 @@ export function RepoNavSelector({
 						)}
 					</Button>
 				</PopoverTrigger>
-				<PopoverContent className="w-48 p-0" align="start" sideOffset={6}>
+				<PopoverContent className="w-52 p-0" align="start" sideOffset={6}>
 					<Command>
 						<CommandInput
 							placeholder="Search orgs..."
-							className="h-7 text-[11px]"
+							className="h-8 text-xs"
 						/>
 						<CommandList>
-							<CommandEmpty className="py-3 text-[11px]">
+							<CommandEmpty className="py-4 text-xs">
 								No orgs found.
 							</CommandEmpty>
 							<CommandGroup>
@@ -118,7 +118,7 @@ export function RepoNavSelector({
 										<CommandItem
 											key={org}
 											value={org}
-											className="gap-1.5 text-[11px] py-1"
+											className="gap-2 text-xs py-1.5"
 											onSelect={() => {
 												if (org !== owner) {
 													const firstRepo = orgRepos[0];
@@ -131,16 +131,16 @@ export function RepoNavSelector({
 												setOrgOpen(false);
 											}}
 										>
-											<Avatar className="size-4 shrink-0">
+											<Avatar className="size-5 shrink-0">
 												{avatarUrl && <AvatarImage src={avatarUrl} alt={org} />}
-												<AvatarFallback className="text-[7px]">
+												<AvatarFallback className="text-[8px]">
 													{org.slice(0, 2).toUpperCase()}
 												</AvatarFallback>
 											</Avatar>
 											<span className="truncate">{org}</span>
 											<Check
 												className={cn(
-													"ml-auto size-3",
+													"ml-auto size-3.5",
 													org === owner ? "opacity-100" : "opacity-0",
 												)}
 											/>

@@ -14,6 +14,7 @@ import {
 	CommandItem,
 	CommandList,
 } from "@packages/ui/components/command";
+import { Check, ChevronsUpDown, Users, X } from "@packages/ui/components/icons";
 import {
 	Popover,
 	PopoverContent,
@@ -24,7 +25,6 @@ import { useGithubActions } from "@packages/ui/rpc/github-actions";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Option } from "effect";
-import { Check, ChevronsUpDown, Users, X } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 
 type Assignee = {

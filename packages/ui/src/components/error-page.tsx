@@ -1,8 +1,8 @@
 "use client";
 
 import { Button } from "@packages/ui/components/button";
+import { AlertTriangle, Home, RefreshCw } from "@packages/ui/components/icons";
 import { cn } from "@packages/ui/lib/utils";
-import { AlertTriangle, Home, RefreshCw } from "lucide-react";
 
 interface ErrorPageProps {
 	error: Error & { digest?: string };

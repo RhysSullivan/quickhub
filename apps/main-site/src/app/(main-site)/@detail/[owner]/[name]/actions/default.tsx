@@ -1,4 +1,4 @@
-import { Play } from "lucide-react";
+import { Play } from "@packages/ui/components/icons";
 import { Suspense } from "react";
 import { SyncProgressOverlay } from "../../../../_components/sync-progress-client";
 

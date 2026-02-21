@@ -1,11 +1,16 @@
 "use client";
 
 import { Result, useAtomValue } from "@effect-atom/atom-react";
+import {
+	ChevronRight,
+	File,
+	Folder,
+	Loader2,
+} from "@packages/ui/components/icons";
 import { Link } from "@packages/ui/components/link";
 import { cn } from "@packages/ui/lib/utils";
 import { useCodeBrowse } from "@packages/ui/rpc/code-browse";
 import { Either, Option, Schema } from "effect";
-import { ChevronRight, File, Folder, Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
 

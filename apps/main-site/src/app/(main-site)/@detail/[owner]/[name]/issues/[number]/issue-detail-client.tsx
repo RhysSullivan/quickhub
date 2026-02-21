@@ -10,12 +10,12 @@ import {
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
 import { Card, CardContent, CardHeader } from "@packages/ui/components/card";
+import { CheckCircle2, CircleDot, Search } from "@packages/ui/components/icons";
 import { Input } from "@packages/ui/components/input";
 import { Separator } from "@packages/ui/components/separator";
 import { Textarea } from "@packages/ui/components/textarea";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
-import { CheckCircle2, CircleDot, Search } from "lucide-react";
 import { useId, useMemo, useState } from "react";
 import { AssigneesCombobox } from "@/app/(main-site)/_components/assignees-combobox";
 import { LabelsCombobox } from "@/app/(main-site)/_components/labels-combobox";

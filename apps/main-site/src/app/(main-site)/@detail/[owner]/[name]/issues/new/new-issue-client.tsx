@@ -11,6 +11,16 @@ import {
 	CommandItem,
 	CommandList,
 } from "@packages/ui/components/command";
+import {
+	Check,
+	ChevronsUpDown,
+	FileText,
+	Info,
+	Loader2,
+	Plus,
+	Tag,
+	X,
+} from "@packages/ui/components/icons";
 import { Input } from "@packages/ui/components/input";
 import {
 	Popover,
@@ -29,16 +39,6 @@ import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useIssueTemplates } from "@packages/ui/rpc/issue-templates";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Option } from "effect";
-import {
-	Check,
-	ChevronsUpDown,
-	FileText,
-	Info,
-	Loader2,
-	Plus,
-	Tag,
-	X,
-} from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useId, useMemo, useState } from "react";
 import { MarkdownBody } from "@/components/markdown-body";

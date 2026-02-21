@@ -1,8 +1,8 @@
 "use client";
 
+import { LogOut } from "@packages/ui/components/icons";
 import { GitHubIcon } from "@packages/ui/icons/index";
 import { authClient } from "@packages/ui/lib/auth-client";
-import { LogOut } from "lucide-react";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 import { Button } from "./button";
 import {

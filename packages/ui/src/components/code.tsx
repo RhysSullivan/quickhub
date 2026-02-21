@@ -1,8 +1,8 @@
 "use client";
 
 import { Button } from "@packages/ui/components/button";
+import { Check, Copy, WrapText } from "@packages/ui/components/icons";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Check, Copy, WrapText } from "lucide-react";
 import { Suspense, useState } from "react";
 import type { BundledLanguage } from "shiki";
 import { codeToHtml } from "shiki";

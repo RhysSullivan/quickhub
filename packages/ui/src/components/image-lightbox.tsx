@@ -1,7 +1,12 @@
 "use client";
 
+import {
+	ChevronLeft,
+	ChevronRight,
+	Download,
+	X,
+} from "@packages/ui/components/icons";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { cn } from "../lib/utils";
 import { Button } from "./button";

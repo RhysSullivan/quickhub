@@ -86,6 +86,6 @@ export function MarkdownBody(
 		? { ...safeComponents, ...userComponents }
 		: safeComponents;
 	return (
-		<Streamdown {...rest} components={merged} linkSafety={{ enabled: false }} />
+		<Streamdown {...rest} components={merged} linkSafety={{ enabled: true }} />
 	);
 }

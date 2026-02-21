@@ -1,9 +1,6 @@
 "use client";
 
 import { Result, useAtomValue } from "@effect-atom/atom-react";
-import { cn } from "@packages/ui/lib/utils";
-import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
-import { Option } from "effect";
 import {
 	AlertCircle,
 	Check,
@@ -16,7 +13,10 @@ import {
 	Play,
 	ShieldCheck,
 	Zap,
-} from "lucide-react";
+} from "@packages/ui/components/icons";
+import { cn } from "@packages/ui/lib/utils";
+import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
+import { Option } from "effect";
 import { type ComponentType, useMemo } from "react";
 
 // ---------------------------------------------------------------------------

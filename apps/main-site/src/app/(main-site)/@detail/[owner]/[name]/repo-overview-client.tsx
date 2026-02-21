@@ -2,17 +2,17 @@
 
 import { Result, useAtomValue } from "@effect-atom/atom-react";
 import { Badge } from "@packages/ui/components/badge";
-import { Link } from "@packages/ui/components/link";
-import { Skeleton } from "@packages/ui/components/skeleton";
-import { cn } from "@packages/ui/lib/utils";
-import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
-import { Option } from "effect";
 import {
 	ArrowRight,
 	CircleDot,
 	GitPullRequest,
 	MessageCircle,
-} from "lucide-react";
+} from "@packages/ui/components/icons";
+import { Link } from "@packages/ui/components/link";
+import { Skeleton } from "@packages/ui/components/skeleton";
+import { cn } from "@packages/ui/lib/utils";
+import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
+import { Option } from "effect";
 import { useMemo } from "react";
 
 function formatRelative(timestamp: number): string {

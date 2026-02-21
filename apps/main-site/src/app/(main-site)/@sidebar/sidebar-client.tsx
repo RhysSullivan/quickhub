@@ -13,6 +13,7 @@ import {
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from "@packages/ui/components/collapsible";
+import { ChevronRight, Download, Plus } from "@packages/ui/components/icons";
 import { Input } from "@packages/ui/components/input";
 import { Link } from "@packages/ui/components/link";
 import { Skeleton } from "@packages/ui/components/skeleton";
@@ -23,7 +24,6 @@ import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { useRepoOnboard } from "@packages/ui/rpc/repo-onboard";
 import { Array as Arr, Option, pipe, Record as Rec } from "effect";
-import { ChevronRight, Download, Plus } from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useMemo, useRef, useState } from "react";
 

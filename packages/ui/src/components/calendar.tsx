@@ -1,12 +1,12 @@
 "use client";
 
 import { Button, buttonVariants } from "@packages/ui/components/button";
-import { cn } from "@packages/ui/lib/utils";
 import {
 	ChevronDownIcon,
 	ChevronLeftIcon,
 	ChevronRightIcon,
-} from "lucide-react";
+} from "@packages/ui/components/icons";
+import { cn } from "@packages/ui/lib/utils";
 import * as React from "react";
 import {
 	type DayButton,

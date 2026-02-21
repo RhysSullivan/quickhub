@@ -8,12 +8,6 @@ import {
 	AvatarImage,
 } from "@packages/ui/components/avatar";
 import { Button } from "@packages/ui/components/button";
-import { Link } from "@packages/ui/components/link";
-import { Skeleton } from "@packages/ui/components/skeleton";
-import { GitHubIcon } from "@packages/ui/icons/index";
-import { authClient } from "@packages/ui/lib/auth-client";
-import { cn } from "@packages/ui/lib/utils";
-import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import {
 	Activity,
 	Eye,
@@ -21,7 +15,13 @@ import {
 	GitPullRequest,
 	MessageCircle,
 	User,
-} from "lucide-react";
+} from "@packages/ui/components/icons";
+import { Link } from "@packages/ui/components/link";
+import { Skeleton } from "@packages/ui/components/skeleton";
+import { GitHubIcon } from "@packages/ui/icons/index";
+import { authClient } from "@packages/ui/lib/auth-client";
+import { cn } from "@packages/ui/lib/utils";
+import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { type ReactNode, useMemo, useState } from "react";
 
 function formatRelative(timestamp: number): string {

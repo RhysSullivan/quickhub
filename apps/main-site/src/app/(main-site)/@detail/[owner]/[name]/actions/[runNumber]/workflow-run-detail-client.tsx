@@ -10,6 +10,26 @@ import {
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
 import { Card, CardContent, CardHeader } from "@packages/ui/components/card";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "@packages/ui/components/dropdown-menu";
+import {
+	AlertTriangle,
+	Ban,
+	Check,
+	ChevronDown,
+	Clock,
+	Copy,
+	ExternalLink,
+	GitBranch,
+	Loader2,
+	Play,
+	RefreshCw,
+	RotateCcw,
+} from "@packages/ui/components/icons";
 import { Input } from "@packages/ui/components/input";
 import { Link } from "@packages/ui/components/link";
 import { Separator } from "@packages/ui/components/separator";
@@ -22,19 +42,6 @@ import { cn } from "@packages/ui/lib/utils";
 import { useGithubActions } from "@packages/ui/rpc/github-actions";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Option } from "effect";
-import {
-	AlertTriangle,
-	Ban,
-	Check,
-	ChevronDown,
-	Clock,
-	ExternalLink,
-	GitBranch,
-	Loader2,
-	Play,
-	RefreshCw,
-	RotateCcw,
-} from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
@@ -82,6 +89,22 @@ type Step = {
 	readonly started_at: string | null;
 	readonly completed_at: string | null;
 };
+
+type CopyMode = "agent" | "cli" | "raw";
+
+const COPY_MODE_KEY = "quickhub:logs-copy-mode";
+
+function getLastCopyMode(): CopyMode {
+	if (typeof window === "undefined") return "raw";
+	const stored = window.localStorage.getItem(COPY_MODE_KEY);
+	if (stored === "agent" || stored === "cli" || stored === "raw") return stored;
+	return "raw";
+}
+
+function setLastCopyMode(mode: CopyMode) {
+	if (typeof window === "undefined") return;
+	window.localStorage.setItem(COPY_MODE_KEY, mode);
+}
 
 export function WorkflowRunDetailClient({
 	owner,
@@ -328,6 +351,9 @@ function JobCard({
 						name={name}
 						githubRunId={githubRunId}
 						githubJobId={job.githubJobId}
+						jobName={job.name}
+						jobConclusion={job.conclusion}
+						steps={steps}
 					/>
 				</CardContent>
 			)}
@@ -340,11 +366,17 @@ function JobLogsPanel({
 	name,
 	githubRunId,
 	githubJobId,
+	jobName,
+	jobConclusion,
+	steps,
 }: {
 	owner: string;
 	name: string;
 	githubRunId: number;
 	githubJobId: number;
+	jobName: string;
+	jobConclusion: string | null;
+	steps: readonly Step[];
 }) {
 	const githubActions = useGithubActions();
 	const [refreshCount, setRefreshCount] = useState(0);
@@ -361,6 +393,13 @@ function JobLogsPanel({
 	const [copyState, setCopyState] = useState<"idle" | "copied" | "error">(
 		"idle",
 	);
+	const [copyMode, setCopyModeState] = useState<CopyMode>(getLastCopyMode);
+	const [dropdownOpen, setDropdownOpen] = useState(false);
+
+	const setCopyMode = useCallback((mode: CopyMode) => {
+		setCopyModeState(mode);
+		setLastCopyMode(mode);
+	}, []);
 
 	const logsValue = Result.value(logsResult);
 	const logsError = Result.error(logsResult);
@@ -383,13 +422,67 @@ function JobLogsPanel({
 		return () => window.clearTimeout(timeout);
 	}, [copyState]);
 
-	const handleCopyLogs = () => {
-		if (filteredLog === null) return;
-		navigator.clipboard
-			.writeText(filteredLog)
-			.then(() => setCopyState("copied"))
-			.catch(() => setCopyState("error"));
-	};
+	const buildAgentPrompt = useCallback(() => {
+		const failedSteps = steps.filter((s) => s.conclusion === "failure");
+		const lines = [
+			`Repository: ${owner}/${name}`,
+			`Run ID: ${githubRunId}`,
+			`Job: ${jobName}`,
+			`Job Conclusion: ${jobConclusion ?? "unknown"}`,
+		];
+		if (failedSteps.length > 0) {
+			lines.push("");
+			lines.push("Failed steps:");
+			for (const s of failedSteps) {
+				lines.push(`  - Step ${s.number}: ${s.name}`);
+			}
+		}
+		if (filteredLog) {
+			lines.push("");
+			lines.push("--- Logs ---");
+			lines.push(filteredLog);
+		}
+		return lines.join("\n");
+	}, [owner, name, githubRunId, jobName, jobConclusion, steps, filteredLog]);
+
+	const buildCliCommand = useCallback(() => {
+		return `gh run view ${githubRunId} --repo ${owner}/${name} --job ${githubJobId} --log`;
+	}, [owner, name, githubRunId, githubJobId]);
+
+	const copyText = useCallback(
+		(mode: CopyMode) => {
+			let text: string;
+			switch (mode) {
+				case "agent":
+					text = buildAgentPrompt();
+					break;
+				case "cli":
+					text = buildCliCommand();
+					break;
+				case "raw":
+					if (filteredLog === null) return;
+					text = filteredLog;
+					break;
+			}
+			navigator.clipboard
+				.writeText(text)
+				.then(() => setCopyState("copied"))
+				.catch(() => setCopyState("error"));
+		},
+		[buildAgentPrompt, buildCliCommand, filteredLog],
+	);
+
+	const handleCopyDefault = useCallback(() => {
+		copyText(copyMode);
+	}, [copyText, copyMode]);
+
+	const handleCopyWithMode = useCallback(
+		(mode: CopyMode) => {
+			setCopyMode(mode);
+			copyText(mode);
+		},
+		[setCopyMode, copyText],
+	);
 
 	const handleDownloadLogs = () => {
 		if (filteredLog === null) return;
@@ -403,6 +496,16 @@ function JobLogsPanel({
 		anchor.remove();
 		window.URL.revokeObjectURL(objectUrl);
 	};
+
+	const isCopyDisabled =
+		copyMode === "raw" ? filteredLog === null || isLogsLoading : isLogsLoading;
+
+	const copyButtonLabel =
+		copyState === "copied"
+			? "Copied"
+			: copyState === "error"
+				? "Retry"
+				: "Copy";
 
 	return (
 		<div className="mt-3 border rounded-md bg-muted/20">
@@ -429,19 +532,66 @@ function JobLogsPanel({
 							"Load logs"
 						)}
 					</Button>
-					<Button
-						variant="ghost"
-						size="sm"
-						className="h-6 px-2 text-[10px]"
-						disabled={filteredLog === null || isLogsLoading}
-						onClick={handleCopyLogs}
-					>
-						{copyState === "copied"
-							? "Copied"
-							: copyState === "error"
-								? "Retry copy"
-								: "Copy"}
-					</Button>
+					<div className="flex items-center">
+						<Button
+							variant="ghost"
+							size="sm"
+							className="h-6 rounded-r-none px-2 text-[10px]"
+							disabled={isCopyDisabled}
+							onClick={handleCopyDefault}
+						>
+							<Copy className="size-3" />
+							{copyButtonLabel}
+						</Button>
+						<DropdownMenu open={dropdownOpen} onOpenChange={setDropdownOpen}>
+							<DropdownMenuTrigger asChild>
+								<Button
+									variant="ghost"
+									size="sm"
+									className="h-6 rounded-l-none border-l border-border/40 px-1 text-[10px]"
+									disabled={isLogsLoading}
+								>
+									<ChevronDown className="size-3" />
+									<span className="sr-only">Copy options</span>
+								</Button>
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end" className="min-w-48">
+								<DropdownMenuItem
+									onClick={() => handleCopyWithMode("agent")}
+									disabled={isLogsLoading}
+								>
+									<span className="flex items-center justify-between w-full gap-2">
+										<span>Copy for your agent</span>
+										{copyMode === "agent" && (
+											<Check className="size-3 text-muted-foreground" />
+										)}
+									</span>
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									onClick={() => handleCopyWithMode("cli")}
+									disabled={isLogsLoading}
+								>
+									<span className="flex items-center justify-between w-full gap-2">
+										<span>Copy CLI command</span>
+										{copyMode === "cli" && (
+											<Check className="size-3 text-muted-foreground" />
+										)}
+									</span>
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									onClick={() => handleCopyWithMode("raw")}
+									disabled={filteredLog === null || isLogsLoading}
+								>
+									<span className="flex items-center justify-between w-full gap-2">
+										<span>Copy raw</span>
+										{copyMode === "raw" && (
+											<Check className="size-3 text-muted-foreground" />
+										)}
+									</span>
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</div>
 					<Button
 						variant="ghost"
 						size="sm"

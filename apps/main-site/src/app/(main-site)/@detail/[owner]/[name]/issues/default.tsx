@@ -1,4 +1,4 @@
-import { CircleDot } from "lucide-react";
+import { CircleDot } from "@packages/ui/components/icons";
 import { Suspense } from "react";
 import { SyncProgressOverlay } from "../../../../_components/sync-progress-client";
 

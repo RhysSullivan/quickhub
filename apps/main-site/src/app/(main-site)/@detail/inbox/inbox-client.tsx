@@ -4,12 +4,6 @@ import { Result, useAtom, useAtomValue } from "@effect-atom/atom-react";
 import { useSubscriptionWithInitial } from "@packages/confect/rpc";
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
-import { Link } from "@packages/ui/components/link";
-import { Skeleton } from "@packages/ui/components/skeleton";
-import { authClient } from "@packages/ui/lib/auth-client";
-import { cn } from "@packages/ui/lib/utils";
-import { useNotifications } from "@packages/ui/rpc/notifications";
-import { Option as Opt } from "effect";
 import {
 	Bell,
 	CircleDot,
@@ -19,7 +13,13 @@ import {
 	Package,
 	RefreshCw,
 	ShieldAlert,
-} from "lucide-react";
+} from "@packages/ui/components/icons";
+import { Link } from "@packages/ui/components/link";
+import { Skeleton } from "@packages/ui/components/skeleton";
+import { authClient } from "@packages/ui/lib/auth-client";
+import { cn } from "@packages/ui/lib/utils";
+import { useNotifications } from "@packages/ui/rpc/notifications";
+import { Option as Opt } from "effect";
 import { useRouter } from "next/navigation";
 import { type ReactNode, useMemo, useState } from "react";
 

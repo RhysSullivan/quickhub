@@ -1,7 +1,7 @@
 "use client";
 
+import { Search, X } from "@packages/ui/components/icons";
 import { cn } from "@packages/ui/lib/utils";
-import { Search, X } from "lucide-react";
 import * as React from "react";
 import { Spinner } from "./spinner";
 

@@ -2,13 +2,6 @@
 
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
-import { Input } from "@packages/ui/components/input";
-import { Link } from "@packages/ui/components/link";
-import { LinkButton } from "@packages/ui/components/link-button";
-import { useInfinitePaginationWithInitial } from "@packages/ui/hooks/use-paginated-atom";
-import { cn } from "@packages/ui/lib/utils";
-import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
-import { useHotkey } from "@tanstack/react-hotkeys";
 import {
 	CheckCircle2,
 	CircleDot,
@@ -16,7 +9,14 @@ import {
 	MessageCircle,
 	Plus,
 	Search,
-} from "lucide-react";
+} from "@packages/ui/components/icons";
+import { Input } from "@packages/ui/components/input";
+import { Link } from "@packages/ui/components/link";
+import { LinkButton } from "@packages/ui/components/link-button";
+import { useInfinitePaginationWithInitial } from "@packages/ui/hooks/use-paginated-atom";
+import { cn } from "@packages/ui/lib/utils";
+import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
+import { useHotkey } from "@tanstack/react-hotkeys";
 import { usePathname, useRouter } from "next/navigation";
 import {
 	useCallback,
