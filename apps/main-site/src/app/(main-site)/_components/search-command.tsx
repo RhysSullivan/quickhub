@@ -12,10 +12,6 @@ import {
 	CommandSeparator,
 	CommandShortcut,
 } from "@packages/ui/components/command";
-import { cn } from "@packages/ui/lib/utils";
-import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
-import { useHotkey } from "@tanstack/react-hotkeys";
-import { Option } from "effect";
 import {
 	CircleDot,
 	Clock3,
@@ -26,9 +22,18 @@ import {
 	Loader2,
 	Rocket,
 	Search,
-} from "lucide-react";
+} from "@packages/ui/components/icons";
+import { cn } from "@packages/ui/lib/utils";
+import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
+import { useHotkey } from "@tanstack/react-hotkeys";
+import { Option } from "effect";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+	buildCanonicalGitHubSearch,
+	parseSearchCommandQuery,
+	type SearchCommandQuery,
+} from "./search-command-dsl";
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
 	const [debounced, setDebounced] = useState(value);
@@ -56,7 +61,7 @@ function useRepoFromPathname() {
 type SearchResultItem = {
 	readonly type: "pr" | "issue";
 	readonly number: number;
-	readonly state: "open" | "closed";
+	readonly state: "open" | "closed" | "merged";
 	readonly title: string;
 	readonly authorLogin: string | null;
 	readonly githubUpdatedAt: number;
@@ -397,7 +402,11 @@ function SearchResultRow({
 			<span
 				className={cn(
 					"text-xs capitalize",
-					item.state === "open" ? "text-green-600" : "text-muted-foreground",
+					item.state === "open"
+						? "text-green-600"
+						: item.state === "merged"
+							? "text-blue-600"
+							: "text-muted-foreground",
 				)}
 			>
 				{item.state}
@@ -412,19 +421,40 @@ function SearchResults({
 	onSelect,
 }: {
 	repo: { readonly owner: string; readonly name: string };
-	query: string;
+	query: SearchCommandQuery;
 	onSelect: (target: NavigationTarget) => void;
 }) {
 	const client = useProjectionQueries();
+	const searchText = query.textTokens.join(" ");
 	const searchAtom = useMemo(
 		() =>
 			client.searchIssuesAndPrs.subscription({
 				ownerLogin: repo.owner,
 				name: repo.name,
-				query,
+				query: searchText,
 				limit: 50,
+				target:
+					query.target === "issue" || query.target === "pr"
+						? query.target
+						: undefined,
+				authorLogin: query.author ?? undefined,
+				assigneeLogin: query.assignee ?? undefined,
+				labels: query.labels.length > 0 ? [...query.labels] : undefined,
+				state: query.state ?? undefined,
+				updatedAfter: query.updatedAfter ?? undefined,
 			}),
-		[client, repo.owner, repo.name, query],
+		[
+			client,
+			repo.owner,
+			repo.name,
+			searchText,
+			query.target,
+			query.author,
+			query.assignee,
+			query.labels,
+			query.state,
+			query.updatedAfter,
+		],
 	);
 	const result = useAtomValue(searchAtom);
 
@@ -582,11 +612,13 @@ function GlobalWorkResults({
 
 function RepoResults({
 	query,
+	org,
 	onSelect,
 	heading = "Repositories",
 	limit = 12,
 }: {
 	query: string;
+	org?: string;
 	onSelect: (target: NavigationTarget) => void;
 	heading?: string;
 	limit?: number;
@@ -608,8 +640,12 @@ function RepoResults({
 
 	const repos: ReadonlyArray<RepoSearchItem> = valueOption.value;
 	const normalizedQuery = query.trim().toLowerCase();
+	const normalizedOrg = org?.trim().toLowerCase() ?? "";
 	const filtered = repos
 		.filter((repo) => {
+			if (normalizedOrg.length > 0) {
+				if (repo.ownerLogin.toLowerCase() !== normalizedOrg) return false;
+			}
 			if (normalizedQuery.length === 0) return true;
 			return (
 				repo.fullName.toLowerCase().includes(normalizedQuery) ||
@@ -628,7 +664,7 @@ function RepoResults({
 				const target: NavigationTarget = {
 					path: `/${repo.ownerLogin}/${repo.name}/pulls`,
 					title: repo.fullName,
-					subtitle: `${repo.openPrCount} PRs · ${repo.openIssueCount} issues`,
+					subtitle: null,
 					kind: "repo",
 				};
 
@@ -712,10 +748,74 @@ function SearchHints() {
 				<Search className="size-4 text-muted-foreground" />
 				<span>Type `issue 45` or `#45` to jump</span>
 			</CommandItem>
+			<CommandItem value="hint dsl1">
+				<Search className="size-4 text-muted-foreground" />
+				<span>Try `issues by elliot label bug`</span>
+			</CommandItem>
+			<CommandItem value="hint dsl2">
+				<Search className="size-4 text-muted-foreground" />
+				<span>Try `prs assigned to elliot in owner/repo last week`</span>
+			</CommandItem>
 			<CommandItem value="hint cmdk">
 				<Search className="size-4 text-muted-foreground" />
 				<span>Open this palette anytime</span>
 				<CommandShortcut>cmd+k</CommandShortcut>
+			</CommandItem>
+		</CommandGroup>
+	);
+}
+
+function QueryDslSummary({
+	query,
+	repo,
+}: {
+	query: SearchCommandQuery;
+	repo: { readonly owner: string; readonly name: string } | null;
+}) {
+	if (!query.hasDsl) return null;
+
+	const chips: Array<string> = [];
+	if (query.target === "issue") chips.push("issues");
+	if (query.target === "pr") chips.push("prs");
+	if (query.target === "repo") chips.push("repos");
+	if (query.author !== null) chips.push(`by ${query.author}`);
+	if (query.assignee !== null) chips.push(`assigned ${query.assignee}`);
+	if (query.repo !== null)
+		chips.push(`in ${query.repo.owner}/${query.repo.name}`);
+	if (query.org !== null) chips.push(`org ${query.org}`);
+	for (const label of query.labels) chips.push(`label ${label}`);
+	if (query.state !== null) chips.push(query.state);
+	if (query.updatedAfter !== null) {
+		chips.push(
+			`updated since ${new Date(query.updatedAfter).toLocaleDateString(
+				undefined,
+				{
+					year: "numeric",
+					month: "short",
+					day: "numeric",
+				},
+			)}`,
+		);
+	}
+
+	const canonical = buildCanonicalGitHubSearch(query, repo);
+
+	return (
+		<CommandGroup heading="Interpreted Query">
+			<CommandItem value={`interpreted ${canonical}`} disabled>
+				<Search className="size-4 text-muted-foreground" />
+				<div className="min-w-0 flex-1 space-y-1">
+					<div className="flex flex-wrap items-center gap-1">
+						{chips.map((chip) => (
+							<Badge key={chip} variant="outline" className="text-[10px]">
+								{chip}
+							</Badge>
+						))}
+					</div>
+					<div className="truncate text-xs text-muted-foreground">
+						{canonical}
+					</div>
+				</div>
 			</CommandItem>
 		</CommandGroup>
 	);
@@ -796,8 +896,16 @@ export function SearchCommand() {
 	);
 
 	const trimmed = debouncedQuery.trim();
+	const parsedQuery = useMemo(
+		() => parseSearchCommandQuery(trimmed),
+		[trimmed],
+	);
+	const effectiveRepo = parsedQuery.repo ?? repo;
 	const hasRepo = repo !== null;
 	const hasQuery = trimmed.length > 0;
+	const repoQueryText = parsedQuery.hasDsl
+		? parsedQuery.textTokens.join(" ")
+		: trimmed;
 
 	return (
 		<CommandDialog
@@ -805,6 +913,7 @@ export function SearchCommand() {
 			onOpenChange={setOpen}
 			title="QuickHub Command Palette"
 			description="Navigate, search issues and PRs, and run quick repo actions"
+			commandProps={{ shouldFilter: false }}
 			showCloseButton={false}
 		>
 			<CommandInput
@@ -840,8 +949,24 @@ export function SearchCommand() {
 
 				{!hasRepo && hasQuery && (
 					<>
-						<GlobalWorkResults query={trimmed} onSelect={handleSelect} />
-						<RepoResults query={trimmed} onSelect={handleSelect} />
+						<QueryDslSummary query={parsedQuery} repo={effectiveRepo} />
+						{parsedQuery.repo !== null && parsedQuery.target !== "repo" ? (
+							<SearchResults
+								repo={parsedQuery.repo}
+								query={parsedQuery}
+								onSelect={handleSelect}
+							/>
+						) : (
+							<GlobalWorkResults
+								query={repoQueryText.length > 0 ? repoQueryText : trimmed}
+								onSelect={handleSelect}
+							/>
+						)}
+						<RepoResults
+							query={repoQueryText}
+							org={parsedQuery.org ?? undefined}
+							onSelect={handleSelect}
+						/>
 					</>
 				)}
 
@@ -861,33 +986,41 @@ export function SearchCommand() {
 
 				{hasRepo && hasQuery && (
 					<>
+						<QueryDslSummary query={parsedQuery} repo={effectiveRepo} />
 						<QuickNumberNavigation
 							repo={repo}
 							query={trimmed}
 							onSelect={handleSelect}
 						/>
-						<SearchResults
-							repo={repo}
-							query={trimmed}
-							onSelect={handleSelect}
-						/>
-						<CommandSeparator />
-						<RepoResults
-							query={trimmed}
-							onSelect={handleSelect}
-							heading="Matching Repositories"
-							limit={6}
-						/>
+						{parsedQuery.target !== "repo" && (
+							<SearchResults
+								repo={effectiveRepo ?? repo}
+								query={parsedQuery}
+								onSelect={handleSelect}
+							/>
+						)}
+						{(parsedQuery.target === "repo" || !parsedQuery.hasDsl) && (
+							<>
+								<CommandSeparator />
+								<RepoResults
+									query={repoQueryText}
+									org={parsedQuery.org ?? undefined}
+									onSelect={handleSelect}
+									heading="Matching Repositories"
+									limit={6}
+								/>
+							</>
+						)}
 					</>
 				)}
 
 				<CommandEmpty>
 					{hasRepo
 						? hasQuery
-							? "No results found. Try `pr 123`, `issue 45`, or a repo name."
+							? "No results found. Try `issues by elliot`, `prs label bug`, or `pr 123`."
 							: "Start typing to search pull requests and issues."
 						: hasQuery
-							? "No repositories found."
+							? "No repositories found. Try `in owner/repo` for direct issue/PR search."
 							: "Start typing to search repositories."}
 				</CommandEmpty>
 			</CommandList>

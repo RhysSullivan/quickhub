@@ -7,6 +7,7 @@ import {
 	ResizablePanel,
 	ResizablePanelGroup,
 } from "@packages/ui/components/resizable";
+import { useHotkey } from "@tanstack/react-hotkeys";
 import { ArrowLeft } from "lucide-react";
 import { usePathname } from "next/navigation";
 import {
@@ -16,6 +17,7 @@ import {
 	Suspense,
 	useCallback,
 	useContext,
+	useMemo,
 	useRef,
 } from "react";
 import { SearchCommand } from "./search-command";
@@ -68,7 +70,15 @@ export function HubShell({
 		}
 	}, []);
 
-	const contextValue: HubSidebarContextValue = { toggleSidebar };
+	useHotkey("[", (event) => {
+		event.preventDefault();
+		toggleSidebar();
+	});
+
+	const contextValue = useMemo<HubSidebarContextValue>(
+		() => ({ toggleSidebar }),
+		[toggleSidebar],
+	);
 
 	return (
 		<HubSidebarContext.Provider value={contextValue}>

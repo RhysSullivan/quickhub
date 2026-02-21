@@ -1,14 +1,14 @@
-import { Link } from "@packages/ui/components/link";
-import { cn } from "@packages/ui/lib/utils";
 import {
-	ArrowLeft,
 	FileCode2,
 	GitPullRequest,
 	Play,
 	TriangleAlert,
-} from "lucide-react";
+} from "@packages/ui/components/icons";
+import { Link } from "@packages/ui/components/link";
+import { cn } from "@packages/ui/lib/utils";
 import { type ReactNode, Suspense } from "react";
 import { serverQueries } from "@/lib/server-queries";
+import { RepoNavSelector } from "./repo-nav-selector";
 import { ListSkeleton } from "./skeletons";
 
 type RepoTab = "pulls" | "issues" | "actions" | "code";
@@ -23,28 +23,23 @@ export async function RepoListShell({
 	children: ReactNode;
 }) {
 	const { owner, name } = await paramsPromise;
-	const overview = await serverQueries.getRepoOverview.queryPromise({
-		ownerLogin: owner,
-		name,
-	});
+	const [overview, initialRepos] = await Promise.all([
+		serverQueries.getRepoOverview.queryPromise({
+			ownerLogin: owner,
+			name,
+		}),
+		serverQueries.listRepos.queryPromise({}),
+	]);
 
 	return (
 		<div className="flex h-full flex-col bg-sidebar">
 			<div className="shrink-0 border-b border-sidebar-border">
-				<div className="flex items-center gap-1.5 px-2 pt-1.5 pb-0">
-					<Link
-						href="/"
-						className="text-muted-foreground/60 hover:text-foreground transition-colors no-underline"
-						aria-label="Back to repositories"
-					>
-						<ArrowLeft className="size-3" />
-					</Link>
-					<span className="text-[11px] font-bold text-foreground truncate tracking-tight">
-						{owner}
-						<span className="text-muted-foreground/40 mx-0.5">/</span>
-						{name}
-					</span>
-				</div>
+				<RepoNavSelector
+					owner={owner}
+					name={name}
+					activeTab={activeTab}
+					initialRepos={initialRepos}
+				/>
 				<div className="flex px-0.5 mt-0.5">
 					<Link
 						href={`/${owner}/${name}/pulls`}
