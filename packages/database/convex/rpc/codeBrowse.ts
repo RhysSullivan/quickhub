@@ -48,6 +48,12 @@ const FileContentResult = Schema.Struct({
 	encoding: Schema.NullOr(Schema.String),
 });
 
+const FileReadStateItem = Schema.Struct({
+	path: Schema.String,
+	fileSha: Schema.String,
+	readAt: Schema.Number,
+});
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -236,6 +242,34 @@ const getCachedFileDef = factory.internalQuery({
 	success: Schema.NullOr(FileContentResult),
 });
 
+/**
+ * Get read states for all files in a repo tree snapshot.
+ */
+const getFileReadStateDef = factory.query({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		treeSha: Schema.String,
+	},
+	success: Schema.Array(FileReadStateItem),
+	error: Schema.Union(NotAuthenticated, RepoNotFound),
+});
+
+/**
+ * Mark a file as read for the current signed-in user.
+ */
+const markFileReadDef = factory.mutation({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		treeSha: Schema.String,
+		path: Schema.String,
+		fileSha: Schema.String,
+	},
+	success: Schema.Struct({ marked: Schema.Boolean }),
+	error: Schema.Union(NotAuthenticated, RepoNotFound),
+});
+
 // ---------------------------------------------------------------------------
 // Helper: resolve repo + token for actions
 // ---------------------------------------------------------------------------
@@ -287,6 +321,47 @@ const resolveRepoAndToken = (
 			installationId: repo.installationId ?? 0,
 			token,
 		};
+	});
+
+/**
+ * Resolve acting user from authenticated session.
+ */
+const getActingUserId = (ctx: {
+	auth: {
+		getUserIdentity: () => Effect.Effect<Option.Option<{ subject: string }>>;
+	};
+}): Effect.Effect<string, NotAuthenticated> =>
+	Effect.gen(function* () {
+		const identity = yield* ctx.auth.getUserIdentity();
+		if (Option.isNone(identity)) {
+			return yield* new NotAuthenticated({ reason: "User is not signed in" });
+		}
+		return identity.value.subject;
+	});
+
+/**
+ * Resolve repository internal id for a public owner/name pair.
+ */
+const resolveRepositoryByOwnerAndName = (
+	ctx: {
+		db: ConfectQueryCtx["db"] | ConfectMutationCtx["db"];
+	},
+	ownerLogin: string,
+	name: string,
+) =>
+	Effect.gen(function* () {
+		const repo = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_ownerLogin_and_name", (q) =>
+				q.eq("ownerLogin", ownerLogin).eq("name", name),
+			)
+			.first();
+
+		if (Option.isNone(repo)) {
+			return yield* new RepoNotFound({ ownerLogin, name });
+		}
+
+		return { repositoryId: repo.value.githubRepoId };
 	});
 
 // ---------------------------------------------------------------------------
@@ -578,6 +653,81 @@ getCachedFileDef.implement((args) =>
 	}),
 );
 
+getFileReadStateDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectQueryCtx;
+		const userId = yield* getActingUserId(ctx);
+		const repo = yield* resolveRepositoryByOwnerAndName(
+			ctx,
+			args.ownerLogin,
+			args.name,
+		);
+
+		const states = yield* ctx.db
+			.query("github_file_read_state")
+			.withIndex("by_userId_and_repositoryId_and_treeSha", (q) =>
+				q
+					.eq("userId", userId)
+					.eq("repositoryId", repo.repositoryId)
+					.eq("treeSha", args.treeSha),
+			)
+			.collect();
+
+		return states.map((state) => ({
+			path: state.path,
+			fileSha: state.fileSha,
+			readAt: state.readAt,
+		}));
+	}),
+);
+
+markFileReadDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectMutationCtx;
+		const userId = yield* getActingUserId(ctx);
+		const repo = yield* resolveRepositoryByOwnerAndName(
+			ctx,
+			args.ownerLogin,
+			args.name,
+		);
+
+		const rows = yield* ctx.db
+			.query("github_file_read_state")
+			.withIndex("by_userId_and_repositoryId_and_treeSha", (q) =>
+				q
+					.eq("userId", userId)
+					.eq("repositoryId", repo.repositoryId)
+					.eq("treeSha", args.treeSha),
+			)
+			.collect();
+
+		const existing = rows.find(
+			(state) => state.path === args.path && state.fileSha === args.fileSha,
+		);
+
+		const now = Date.now();
+		if (existing) {
+			yield* ctx.db.patch(existing._id, {
+				readAt: now,
+				path: args.path,
+				fileSha: args.fileSha,
+			});
+			return { marked: false };
+		}
+
+		yield* ctx.db.insert("github_file_read_state", {
+			userId,
+			repositoryId: repo.repositoryId,
+			treeSha: args.treeSha,
+			path: args.path,
+			fileSha: args.fileSha,
+			readAt: now,
+		});
+
+		return { marked: true };
+	}),
+);
+
 // ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
@@ -590,6 +740,8 @@ const codeBrowseModule = makeRpcModule(
 		upsertFileCache: upsertFileCacheDef,
 		getCachedTree: getCachedTreeDef,
 		getCachedFile: getCachedFileDef,
+		getFileReadState: getFileReadStateDef,
+		markFileRead: markFileReadDef,
 		getRepoInfo: getRepoInfoDef,
 	},
 	{ middlewares: DatabaseRpcTelemetryLayer },
@@ -602,6 +754,8 @@ export const {
 	upsertFileCache,
 	getCachedTree,
 	getCachedFile,
+	getFileReadState,
+	markFileRead,
 	getRepoInfo,
 } = codeBrowseModule.handlers;
 export { codeBrowseModule };

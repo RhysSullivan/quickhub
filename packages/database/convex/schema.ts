@@ -494,6 +494,15 @@ const GitHubIssueTemplateCacheSchema = Schema.Struct({
 	cachedAt: Schema.Number,
 });
 
+const GitHubFileReadStateSchema = Schema.Struct({
+	userId: Schema.String,
+	repositoryId: Schema.Number,
+	treeSha: Schema.String,
+	path: Schema.String,
+	fileSha: Schema.String,
+	readAt: Schema.Number,
+});
+
 // ============================================================
 // Schema Definition
 // ============================================================
@@ -678,6 +687,20 @@ export const confectSchema = defineSchema({
 	github_issue_template_cache: defineTable(GitHubIssueTemplateCacheSchema)
 		.index("by_repositoryId", ["repositoryId"])
 		.index("by_repositoryId_and_filename", ["repositoryId", "filename"]),
+
+	github_file_read_state: defineTable(GitHubFileReadStateSchema)
+		.index("by_userId_and_repositoryId", ["userId", "repositoryId"])
+		.index("by_userId_and_repositoryId_and_treeSha", [
+			"userId",
+			"repositoryId",
+			"treeSha",
+		])
+		.index("by_userId_and_repositoryId_and_treeSha_and_fileSha", [
+			"userId",
+			"repositoryId",
+			"treeSha",
+			"fileSha",
+		]),
 });
 
 export default confectSchema.convexSchemaDefinition;

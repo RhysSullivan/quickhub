@@ -1,12 +1,13 @@
 import { api } from "@packages/database/convex/_generated/api";
 import { Either, Schema } from "effect";
 import { File } from "lucide-react";
-import { fetchAuthAction } from "@/lib/auth-server";
+import { fetchAuthAction, fetchAuthMutation } from "@/lib/auth-server";
 import { FileViewerMonaco } from "./file-viewer-monaco";
 
 const FilePayloadSchema = Schema.NullOr(
 	Schema.Struct({
 		path: Schema.String,
+		sha: Schema.String,
 		content: Schema.NullOr(Schema.String),
 		size: Schema.Number,
 	}),
@@ -44,10 +45,12 @@ export async function FileViewer({
 	owner,
 	name,
 	path,
+	treeSha,
 }: {
 	owner: string;
 	name: string;
 	path: string | null;
+	treeSha: string | null;
 }) {
 	if (path === null) {
 		return (
@@ -114,6 +117,16 @@ export async function FileViewer({
 		}
 
 		if (fileData.content === null) {
+			const resolvedTreeSha = treeSha ?? "HEAD";
+
+			await fetchAuthMutation(api.rpc.codeBrowse.markFileRead, {
+				ownerLogin: owner,
+				name,
+				treeSha: resolvedTreeSha,
+				path: fileData.path,
+				fileSha: fileData.sha,
+			}).catch(() => null);
+
 			return (
 				<div className="flex h-full flex-col">
 					<div className="flex items-center gap-2 border-b px-3 py-2">
@@ -135,6 +148,14 @@ export async function FileViewer({
 		}
 
 		const lineCount = fileData.content.split("\n").length;
+		const resolvedTreeSha = treeSha ?? "HEAD";
+		await fetchAuthMutation(api.rpc.codeBrowse.markFileRead, {
+			ownerLogin: owner,
+			name,
+			treeSha: resolvedTreeSha,
+			path: fileData.path,
+			fileSha: fileData.sha,
+		}).catch(() => null);
 
 		return (
 			<div className="flex h-full flex-col">

@@ -9,8 +9,34 @@ import {
 } from "@packages/ui/components/resizable";
 import { ArrowLeft } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { type ReactNode, Suspense } from "react";
+import {
+	type ComponentRef,
+	createContext,
+	type ReactNode,
+	Suspense,
+	useCallback,
+	useContext,
+	useRef,
+} from "react";
 import { SearchCommand } from "./search-command";
+
+type SidebarPanelRef = ComponentRef<typeof ResizablePanel>;
+
+// ---------------------------------------------------------------------------
+// Hub sidebar context — allows child components to toggle the app sidebar
+// ---------------------------------------------------------------------------
+
+type HubSidebarContextValue = {
+	toggleSidebar: () => void;
+};
+
+const HubSidebarContext = createContext<HubSidebarContextValue>({
+	toggleSidebar: () => {},
+});
+
+export function useHubSidebar() {
+	return useContext(HubSidebarContext);
+}
 
 /**
  * Two-panel resizable shell that positions parallel route slots.
@@ -30,42 +56,61 @@ export function HubShell({
 	sidebar: ReactNode;
 	detail: ReactNode;
 }) {
+	const sidebarPanelRef = useRef<SidebarPanelRef>(null);
+
+	const toggleSidebar = useCallback(() => {
+		const panel = sidebarPanelRef.current;
+		if (panel === null) return;
+		if (panel.isCollapsed()) {
+			panel.expand();
+		} else {
+			panel.collapse();
+		}
+	}, []);
+
+	const contextValue: HubSidebarContextValue = { toggleSidebar };
+
 	return (
-		<div className="h-dvh w-full bg-background">
-			{/* Desktop: two-panel resizable */}
-			<div className="hidden md:block h-full">
-				<ResizablePanelGroup direction="horizontal" className="h-full">
-					{/* Panel 1: Sidebar (repos or list) */}
-					<ResizablePanel
-						defaultSize={13}
-						minSize={8}
-						maxSize={20}
-						className="border-r border-border/60"
-					>
-						<Suspense fallback={null}>{sidebar}</Suspense>
-					</ResizablePanel>
+		<HubSidebarContext.Provider value={contextValue}>
+			<div className="h-dvh w-full bg-background">
+				{/* Desktop: two-panel resizable */}
+				<div className="hidden md:block h-full">
+					<ResizablePanelGroup direction="horizontal" className="h-full">
+						{/* Panel 1: Sidebar (repos or list) */}
+						<ResizablePanel
+							ref={sidebarPanelRef}
+							defaultSize={13}
+							minSize={8}
+							maxSize={20}
+							collapsible
+							collapsedSize={0}
+							className="border-r border-border/60"
+						>
+							<Suspense fallback={null}>{sidebar}</Suspense>
+						</ResizablePanel>
 
-					<ResizableHandle />
+						<ResizableHandle />
 
-					{/* Panel 2: Detail/Content */}
-					<ResizablePanel defaultSize={87} minSize={60} className="min-w-0">
-						<Suspense fallback={null}>{detail}</Suspense>
-					</ResizablePanel>
-				</ResizablePanelGroup>
-			</div>
+						{/* Panel 2: Detail/Content */}
+						<ResizablePanel defaultSize={87} minSize={60} className="min-w-0">
+							<Suspense fallback={null}>{detail}</Suspense>
+						</ResizablePanel>
+					</ResizablePanelGroup>
+				</div>
 
-			{/* Mobile: stacked view — usePathname is isolated here */}
-			<div className="md:hidden h-full">
-				<Suspense>
-					<MobileView sidebar={sidebar} detail={detail} />
+				{/* Mobile: stacked view — usePathname is isolated here */}
+				<div className="md:hidden h-full">
+					<Suspense>
+						<MobileView sidebar={sidebar} detail={detail} />
+					</Suspense>
+				</div>
+
+				<Suspense fallback={null}>
+					<SearchCommand />
 				</Suspense>
+				<KeyboardShortcutsDialog />
 			</div>
-
-			<Suspense fallback={null}>
-				<SearchCommand />
-			</Suspense>
-			<KeyboardShortcutsDialog />
-		</div>
+		</HubSidebarContext.Provider>
 	);
 }
 

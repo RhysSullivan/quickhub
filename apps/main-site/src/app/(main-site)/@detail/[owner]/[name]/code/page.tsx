@@ -5,9 +5,16 @@ export default async function CodeDetailPage({
 	searchParams,
 }: {
 	params: Promise<{ owner: string; name: string }>;
-	searchParams: Promise<{ path?: string }>;
+	searchParams: Promise<{ path?: string; treeSha?: string }>;
 }) {
 	const { owner, name } = await params;
-	const { path } = await searchParams;
-	return <FileViewer owner={owner} name={name} path={path ?? null} />;
+	const { path, treeSha } = await searchParams;
+	return (
+		<FileViewer
+			owner={owner}
+			name={name}
+			path={path ?? null}
+			treeSha={treeSha ?? null}
+		/>
+	);
 }

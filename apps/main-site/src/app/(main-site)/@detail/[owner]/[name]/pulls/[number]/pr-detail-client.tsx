@@ -25,10 +25,10 @@ import { useCodeBrowse } from "@packages/ui/rpc/code-browse";
 import { useGithubActions } from "@packages/ui/rpc/github-actions";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
-import { type FileDiffMetadata, parseDiffFromFile } from "@pierre/diffs";
+import type { FileDiffOptions } from "@pierre/diffs";
 import {
 	type DiffLineAnnotation,
-	FileDiff,
+	MultiFileDiff,
 	PatchDiff,
 } from "@pierre/diffs/react";
 import { useHotkey } from "@tanstack/react-hotkeys";
@@ -47,14 +47,18 @@ import {
 	Search,
 } from "lucide-react";
 import {
+	forwardRef,
+	type ReactElement,
 	useCallback,
 	useEffect,
 	useId,
+	useImperativeHandle,
 	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { AssigneesCombobox } from "@/app/(main-site)/_components/assignees-combobox";
+import { useHubSidebar } from "@/app/(main-site)/_components/hub-shell";
 import { LabelsCombobox } from "@/app/(main-site)/_components/labels-combobox";
 import { MarkdownBody } from "@/components/markdown-body";
 
@@ -280,38 +284,87 @@ function inlineTargetsEqual(
 
 type FullContextDiffState = {
 	readonly status: "loading" | "ready" | "error";
-	readonly diff: FileDiffMetadata | null;
+	readonly files: {
+		readonly oldFile: {
+			readonly name: string;
+			readonly contents: string;
+		};
+		readonly newFile: {
+			readonly name: string;
+			readonly contents: string;
+		};
+	} | null;
 	readonly errorMessage: string | null;
 };
 
 const HUNK_HEADER_PATTERN = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/gm;
 
 function patchHasCollapsedContext(patch: string): boolean {
-	const matches = Array.from(patch.matchAll(HUNK_HEADER_PATTERN));
-	if (matches.length < 2) return false;
+	return Array.from(patch.matchAll(HUNK_HEADER_PATTERN)).length > 0;
+}
 
-	let previousOldEnd = 0;
-	let previousNewEnd = 0;
-	let isFirst = true;
+function MouseDownExpandContainer({ children }: { children: ReactElement }) {
+	const wrapperRef = useRef<HTMLDivElement>(null);
 
-	for (const match of matches) {
-		const oldStart = Number.parseInt(match[1] ?? "0", 10);
-		const oldCount = Number.parseInt(match[2] ?? "1", 10);
-		const newStart = Number.parseInt(match[3] ?? "0", 10);
-		const newCount = Number.parseInt(match[4] ?? "1", 10);
+	useEffect(() => {
+		const host = wrapperRef.current?.querySelector("diffs-container");
+		if (!(host instanceof HTMLElement)) return;
 
-		if (!isFirst) {
-			if (oldStart > previousOldEnd + 1 && newStart > previousNewEnd + 1) {
-				return true;
+		const shadow = host.shadowRoot;
+		if (shadow === null) return;
+
+		let suppressNextClick = false;
+
+		const getExpandButton = (event: Event): HTMLElement | null => {
+			for (const node of event.composedPath()) {
+				if (
+					node instanceof HTMLElement &&
+					node.dataset.expandButton !== undefined
+				) {
+					return node;
+				}
 			}
-		}
+			return null;
+		};
 
-		previousOldEnd = oldStart + oldCount - 1;
-		previousNewEnd = newStart + newCount - 1;
-		isFirst = false;
-	}
+		const handleMouseDown = (event: Event) => {
+			if (!(event instanceof MouseEvent)) return;
+			if (event.button !== 0) return;
+			const expandButton = getExpandButton(event);
+			if (expandButton === null) return;
 
-	return false;
+			event.preventDefault();
+			event.stopPropagation();
+			suppressNextClick = true;
+			expandButton.dispatchEvent(
+				new MouseEvent("click", {
+					bubbles: true,
+					cancelable: true,
+					composed: true,
+				}),
+			);
+		};
+
+		const handleClickCapture = (event: Event) => {
+			if (!suppressNextClick) return;
+			const expandButton = getExpandButton(event);
+			if (expandButton === null) return;
+
+			suppressNextClick = false;
+			event.preventDefault();
+			event.stopPropagation();
+		};
+
+		shadow.addEventListener("mousedown", handleMouseDown, true);
+		shadow.addEventListener("click", handleClickCapture, true);
+
+		return () => {
+			shadow.removeEventListener("mousedown", handleMouseDown, true);
+			shadow.removeEventListener("click", handleClickCapture, true);
+		};
+	});
+
+	return <div ref={wrapperRef}>{children}</div>;
 }
 
 export function PrDetailClient({
@@ -461,6 +514,43 @@ export function PrDetailClient({
 		setReviewDraftReplies([]);
 	}, []);
 
+	const [focusedFilename, setFocusedFilename] = useState<string | null>(null);
+	const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
+	const diffPanelRef = useRef<DiffPanelHandle>(null);
+
+	const handleJumpToFile = useCallback((filename: string) => {
+		diffPanelRef.current?.jumpToFile(filename);
+	}, []);
+
+	const fileTree = useMemo(
+		() =>
+			buildFileTree(
+				filesData.files.map((file) => ({
+					filename: file.filename,
+					status: file.status,
+					additions: file.additions,
+					deletions: file.deletions,
+					reviewComments:
+						pr?.reviewComments.filter(
+							(comment) => comment.path === file.filename,
+						) ?? [],
+				})),
+			),
+		[filesData.files, pr?.reviewComments],
+	);
+
+	const { toggleSidebar } = useHubSidebar();
+
+	useHotkey("[", (event) => {
+		event.preventDefault();
+		toggleSidebar();
+	});
+
+	useHotkey("]", (event) => {
+		event.preventDefault();
+		setIsRightSidebarOpen((current) => !current);
+	});
+
 	if (pr === null) {
 		return (
 			<div className="flex h-full items-center justify-center">
@@ -481,28 +571,37 @@ export function PrDetailClient({
 			{/* Main area: diff */}
 			<div className="flex-1 min-w-0 h-full overflow-y-auto scroll-smooth">
 				<DiffPanel
+					ref={diffPanelRef}
 					pr={pr}
 					filesData={filesData}
 					isSyncingFiles={isSyncingFiles}
 					owner={owner}
 					name={name}
+					focusedFilename={focusedFilename}
+					onFocusFile={setFocusedFilename}
 					onAddDraftReply={addDraftReply}
 				/>
 			</div>
 
-			{/* Right sidebar: description, metadata, reviews, comments */}
-			<div className="hidden lg:flex w-80 xl:w-96 shrink-0 border-l h-full flex-col overflow-y-auto">
-				<InfoSidebar
-					pr={pr}
-					owner={owner}
-					name={name}
-					prNumber={prNumber}
-					reviewDraftReplies={reviewDraftReplies}
-					onRemoveDraftReply={removeDraftReply}
-					onUpdateDraftReplyBody={updateDraftReplyBody}
-					onClearDraftReplies={clearDraftReplies}
-				/>
-			</div>
+			{/* Right sidebar: file tree, description, metadata, reviews, comments */}
+			{isRightSidebarOpen && (
+				<div className="hidden lg:flex w-80 xl:w-96 shrink-0 border-l h-full flex-col overflow-y-auto">
+					<InfoSidebar
+						pr={pr}
+						owner={owner}
+						name={name}
+						prNumber={prNumber}
+						fileTree={fileTree}
+						fileCount={filesData.files.length}
+						focusedFilename={focusedFilename}
+						onJumpToFile={handleJumpToFile}
+						reviewDraftReplies={reviewDraftReplies}
+						onRemoveDraftReply={removeDraftReply}
+						onUpdateDraftReplyBody={updateDraftReplyBody}
+						onClearDraftReplies={clearDraftReplies}
+					/>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -729,21 +828,37 @@ function FileTreeItem({
 // Left: Diff / Files Changed
 // ---------------------------------------------------------------------------
 
-function DiffPanel({
-	pr,
-	filesData,
-	isSyncingFiles,
-	owner,
-	name,
-	onAddDraftReply,
-}: {
-	pr: PrDetail;
-	filesData: FilesData;
-	isSyncingFiles: boolean;
-	owner: string;
-	name: string;
-	onAddDraftReply: (reply: Omit<DraftReviewReply, "id" | "createdAt">) => void;
-}) {
+type DiffPanelHandle = {
+	jumpToFile: (filename: string) => void;
+};
+
+const DiffPanel = forwardRef<
+	DiffPanelHandle,
+	{
+		pr: PrDetail;
+		filesData: FilesData;
+		isSyncingFiles: boolean;
+		owner: string;
+		name: string;
+		focusedFilename: string | null;
+		onFocusFile: (filename: string | null) => void;
+		onAddDraftReply: (
+			reply: Omit<DraftReviewReply, "id" | "createdAt">,
+		) => void;
+	}
+>(function DiffPanel(
+	{
+		pr,
+		filesData,
+		isSyncingFiles,
+		owner,
+		name,
+		focusedFilename: focusedFilenameProp,
+		onFocusFile,
+		onAddDraftReply,
+	},
+	ref,
+) {
 	const githubActions = useGithubActions();
 	const [inlineCommentResult, createInlineComment] = useAtom(
 		githubActions.createPrReviewComment.call,
@@ -763,7 +878,6 @@ function DiffPanel({
 		useState<InlineReviewCommentTarget | null>(null);
 	const [inlineComposerBody, setInlineComposerBody] = useState("");
 	const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
-	const [isFileTreeOpen, setIsFileTreeOpen] = useState(true);
 	const filterInputRef = useRef<HTMLInputElement>(null);
 
 	const diffPrefKey = `quickhub.diff.preferences.${owner}.${name}`;
@@ -896,17 +1010,16 @@ function DiffPanel({
 	const totalAdditions = files.reduce((sum, file) => sum + file.additions, 0);
 	const totalDeletions = files.reduce((sum, file) => sum + file.deletions, 0);
 	const totalReviewComments = pr.reviewComments.length;
-	// Raw user intent — may point to a file no longer in filteredEntries
-	const [focusedFilenameRaw, setFocusedFilename] = useState<string | null>(
-		null,
-	);
-	// Derived: clamp to a valid entry (or fall back to the first visible file)
+
+	// Derived: clamp the parent-provided focusedFilename to a valid entry
 	const focusedFilename =
 		filteredEntries.length === 0
 			? null
-			: focusedFilenameRaw !== null &&
-					filteredEntries.some((entry) => entry.filename === focusedFilenameRaw)
-				? focusedFilenameRaw
+			: focusedFilenameProp !== null &&
+					filteredEntries.some(
+						(entry) => entry.filename === focusedFilenameProp,
+					)
+				? focusedFilenameProp
 				: (filteredEntries[0]?.filename ?? null);
 
 	const fileAnchorId = useCallback(
@@ -927,12 +1040,14 @@ function DiffPanel({
 
 			const target = document.getElementById(fileAnchorId(filename));
 			if (target !== null) {
-				setFocusedFilename(filename);
+				onFocusFile(filename);
 				target.scrollIntoView({ block: "start", behavior: "smooth" });
 			}
 		},
-		[fileAnchorId],
+		[fileAnchorId, onFocusFile],
 	);
+
+	useImperativeHandle(ref, () => ({ jumpToFile }), [jumpToFile]);
 
 	const moveFocusedFile = useCallback(
 		(direction: "next" | "previous") => {
@@ -954,12 +1069,12 @@ function DiffPanel({
 		[filteredEntries, focusedFilename, jumpToFile],
 	);
 
-	useHotkey("]", (event) => {
+	useHotkey("J", (event) => {
 		event.preventDefault();
 		moveFocusedFile("next");
 	});
 
-	useHotkey("[", (event) => {
+	useHotkey("K", (event) => {
 		event.preventDefault();
 		moveFocusedFile("previous");
 	});
@@ -974,7 +1089,7 @@ function DiffPanel({
 					...current,
 					[filename]: {
 						status: "loading",
-						diff: null,
+						files: null,
 						errorMessage: null,
 					},
 				};
@@ -990,7 +1105,7 @@ function DiffPanel({
 					...current,
 					[filename]: {
 						status: "error",
-						diff: null,
+						files: null,
 						errorMessage: "No inline patch available.",
 					},
 				}));
@@ -1027,7 +1142,7 @@ function DiffPanel({
 						...current,
 						[filename]: {
 							status: "error",
-							diff: null,
+							files: null,
 							errorMessage:
 								"Could not load full context for binary or truncated content.",
 						},
@@ -1035,22 +1150,23 @@ function DiffPanel({
 					return;
 				}
 
-				const parsedDiff = parseDiffFromFile(
-					{
-						name: oldPath,
-						contents: oldFile?.content ?? "",
-					},
-					{
-						name: entry.filename,
-						contents: newFile?.content ?? "",
-					},
-				);
+				const oldFileForDiff = {
+					name: oldPath,
+					contents: oldFile?.content ?? "",
+				};
+				const newFileForDiff = {
+					name: entry.filename,
+					contents: newFile?.content ?? "",
+				};
 
 				setFullContextByFilename((current) => ({
 					...current,
 					[filename]: {
 						status: "ready",
-						diff: parsedDiff,
+						files: {
+							oldFile: oldFileForDiff,
+							newFile: newFileForDiff,
+						},
 						errorMessage: null,
 					},
 				}));
@@ -1059,7 +1175,7 @@ function DiffPanel({
 					...current,
 					[filename]: {
 						status: "error",
-						diff: null,
+						files: null,
 						errorMessage: "Failed to load full file context.",
 					},
 				}));
@@ -1159,11 +1275,6 @@ function DiffPanel({
 		return counts;
 	}, [files]);
 
-	const fileTree = useMemo(
-		() => buildFileTree(filteredEntries),
-		[filteredEntries],
-	);
-
 	return (
 		<div className="p-4 pb-16">
 			{/* ── PR Header ── */}
@@ -1197,6 +1308,113 @@ function DiffPanel({
 						)}
 						<span className="text-muted-foreground/30">&middot;</span>
 						<span>{formatRelative(pr.githubUpdatedAt)}</span>
+
+						<Separator orientation="vertical" className="mx-0.5 h-4" />
+
+						{/* View mode toggle */}
+						<div className="inline-flex items-center rounded-md border bg-muted/30 p-0.5">
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										type="button"
+										onClick={() => setViewMode("split")}
+										className={cn(
+											"inline-flex items-center gap-1.5 rounded-[5px] px-2 py-0.5 text-[11px] font-medium transition-all",
+											viewMode === "split"
+												? "bg-background text-foreground shadow-sm"
+												: "text-muted-foreground hover:text-foreground",
+										)}
+									>
+										<Columns2 className="size-3.5" />
+										Split
+									</button>
+								</TooltipTrigger>
+								<TooltipContent>
+									Split diff view <Kbd>Shift</Kbd>+<Kbd>D</Kbd>
+								</TooltipContent>
+							</Tooltip>
+							<Tooltip>
+								<TooltipTrigger asChild>
+									<button
+										type="button"
+										onClick={() => setViewMode("unified")}
+										className={cn(
+											"inline-flex items-center gap-1.5 rounded-[5px] px-2 py-0.5 text-[11px] font-medium transition-all",
+											viewMode === "unified"
+												? "bg-background text-foreground shadow-sm"
+												: "text-muted-foreground hover:text-foreground",
+										)}
+									>
+										<Rows3 className="size-3.5" />
+										Unified
+									</button>
+								</TooltipTrigger>
+								<TooltipContent>
+									Unified diff view <Kbd>Shift</Kbd>+<Kbd>D</Kbd>
+								</TooltipContent>
+							</Tooltip>
+						</div>
+
+						<Separator orientation="vertical" className="mx-0.5 h-4" />
+
+						{/* Status filter pills */}
+						<div className="flex items-center gap-0.5">
+							{(
+								[
+									["all", "All", statusCounts.all],
+									["modified", "Modified", statusCounts.modified],
+									["added", "Added", statusCounts.added],
+									["removed", "Removed", statusCounts.removed],
+									["renamed", "Renamed", statusCounts.renamed],
+								] as const
+							).map(([value, label, count]) => (
+								<button
+									key={value}
+									type="button"
+									onClick={() => setStatusFilter(value)}
+									className={cn(
+										"inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors",
+										statusFilter === value
+											? "bg-foreground/8 text-foreground"
+											: "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50",
+										count === 0 &&
+											value !== "all" &&
+											"opacity-40 pointer-events-none",
+									)}
+								>
+									{label}
+									{value !== "all" && count > 0 && (
+										<span className="text-[10px] tabular-nums text-muted-foreground/50">
+											{count}
+										</span>
+									)}
+								</button>
+							))}
+						</div>
+
+						<Separator orientation="vertical" className="mx-0.5 h-4" />
+
+						{/* Filter files input */}
+						<div className="relative min-w-[140px]">
+							<Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground/40" />
+							<Input
+								ref={filterInputRef}
+								id={fileFilterInputId}
+								value={fileQuery}
+								onChange={(event) => setFileQuery(event.target.value)}
+								placeholder="Filter files..."
+								className="h-6 pl-6 pr-1 text-[11px] border-0 bg-transparent shadow-none focus-visible:ring-0 placeholder:text-muted-foreground/40"
+							/>
+						</div>
+						<span className="text-[10px] text-muted-foreground/50 tabular-nums">
+							{filteredEntries.length}/{files.length}
+						</span>
+						{totalReviewComments > 0 && (
+							<span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/50">
+								<MessageSquare className="size-3" />
+								<span className="tabular-nums">{totalReviewComments}</span>
+							</span>
+						)}
 					</div>
 				</div>
 			</div>
@@ -1208,91 +1426,9 @@ function DiffPanel({
 
 			{/* ── Toolbar ── */}
 			<div className="sticky top-0 z-10 mb-4 rounded-lg border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 shadow-sm">
-				{/* Top row: view mode, status filters, collapse/expand, navigation */}
 				<div className="flex items-center gap-1 px-2.5 py-2">
-					{/* View mode toggle */}
-					<div className="inline-flex items-center rounded-md border bg-muted/30 p-0.5">
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									type="button"
-									onClick={() => setViewMode("split")}
-									className={cn(
-										"inline-flex items-center gap-1.5 rounded-[5px] px-2 py-1 text-[11px] font-medium transition-all",
-										viewMode === "split"
-											? "bg-background text-foreground shadow-sm"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									<Columns2 className="size-3.5" />
-									Split
-								</button>
-							</TooltipTrigger>
-							<TooltipContent>
-								Split diff view <Kbd>Shift</Kbd>+<Kbd>D</Kbd>
-							</TooltipContent>
-						</Tooltip>
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<button
-									type="button"
-									onClick={() => setViewMode("unified")}
-									className={cn(
-										"inline-flex items-center gap-1.5 rounded-[5px] px-2 py-1 text-[11px] font-medium transition-all",
-										viewMode === "unified"
-											? "bg-background text-foreground shadow-sm"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									<Rows3 className="size-3.5" />
-									Unified
-								</button>
-							</TooltipTrigger>
-							<TooltipContent>
-								Unified diff view <Kbd>Shift</Kbd>+<Kbd>D</Kbd>
-							</TooltipContent>
-						</Tooltip>
-					</div>
-
-					<Separator orientation="vertical" className="mx-1 h-5" />
-
-					{/* Status filter pills */}
+					{/* Collapse/expand, navigation */}
 					<div className="flex items-center gap-0.5">
-						{(
-							[
-								["all", "All", statusCounts.all],
-								["modified", "Modified", statusCounts.modified],
-								["added", "Added", statusCounts.added],
-								["removed", "Removed", statusCounts.removed],
-								["renamed", "Renamed", statusCounts.renamed],
-							] as const
-						).map(([value, label, count]) => (
-							<button
-								key={value}
-								type="button"
-								onClick={() => setStatusFilter(value)}
-								className={cn(
-									"inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
-									statusFilter === value
-										? "bg-foreground/8 text-foreground"
-										: "text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/50",
-									count === 0 &&
-										value !== "all" &&
-										"opacity-40 pointer-events-none",
-								)}
-							>
-								{label}
-								{value !== "all" && count > 0 && (
-									<span className="text-[10px] tabular-nums text-muted-foreground/50">
-										{count}
-									</span>
-								)}
-							</button>
-						))}
-					</div>
-
-					{/* Right side: collapse/expand, navigation */}
-					<div className="ml-auto flex items-center gap-0.5">
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
@@ -1338,7 +1474,7 @@ function DiffPanel({
 									</Button>
 								</TooltipTrigger>
 								<TooltipContent>
-									Previous file <Kbd>[</Kbd>
+									Previous file <Kbd>k</Kbd>
 								</TooltipContent>
 							</Tooltip>
 							<span className="text-[11px] tabular-nums text-muted-foreground min-w-[3ch] text-center">
@@ -1359,37 +1495,10 @@ function DiffPanel({
 									</Button>
 								</TooltipTrigger>
 								<TooltipContent>
-									Next file <Kbd>]</Kbd>
+									Next file <Kbd>j</Kbd>
 								</TooltipContent>
 							</Tooltip>
 						</div>
-					</div>
-				</div>
-
-				{/* Search bar row */}
-				<div className="flex items-center gap-2 border-t px-2.5 py-1.5">
-					<div className="relative min-w-0 flex-1">
-						<Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/40" />
-						<Input
-							ref={filterInputRef}
-							id={fileFilterInputId}
-							value={fileQuery}
-							onChange={(event) => setFileQuery(event.target.value)}
-							placeholder="Filter files..."
-							className="h-7 pl-7 text-xs border-0 bg-transparent shadow-none focus-visible:ring-0 placeholder:text-muted-foreground/40"
-						/>
-					</div>
-					<div className="flex items-center gap-2 shrink-0">
-						<span className="text-[11px] text-muted-foreground/50 tabular-nums">
-							{filteredEntries.length}/{files.length}
-						</span>
-						{totalReviewComments > 0 && (
-							<span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/50">
-								<MessageSquare className="size-3" />
-								<span className="tabular-nums">{totalReviewComments}</span>
-							</span>
-						)}
-						<Kbd className="hidden sm:inline-flex">Shift+F</Kbd>
 					</div>
 				</div>
 
@@ -1423,41 +1532,6 @@ function DiffPanel({
 						/>
 					</div>
 
-					{/* File tree (collapsible) */}
-					{filteredEntries.length > 1 && (
-						<div className="rounded-lg border">
-							<button
-								type="button"
-								onClick={() => setIsFileTreeOpen((prev) => !prev)}
-								className="flex w-full items-center gap-2 px-3 py-2 text-xs hover:bg-muted/30 transition-colors"
-							>
-								<ChevronDown
-									className={cn(
-										"size-3 text-muted-foreground transition-transform duration-150",
-										!isFileTreeOpen && "-rotate-90",
-									)}
-								/>
-								<span className="font-medium">Changed files</span>
-								<span className="text-muted-foreground/50 tabular-nums">
-									{filteredEntries.length}
-								</span>
-							</button>
-							{isFileTreeOpen && (
-								<div className="border-t px-1.5 py-1.5 max-h-64 overflow-y-auto">
-									{fileTree.map((node) => (
-										<FileTreeItem
-											key={node.fullPath}
-											node={node}
-											focusedFilename={focusedFilename}
-											onJumpToFile={jumpToFile}
-											depth={0}
-										/>
-									))}
-								</div>
-							)}
-						</div>
-					)}
-
 					{/* Diff blocks */}
 					{filteredEntries.length > 0 && (
 						<div className="space-y-3">
@@ -1489,9 +1563,9 @@ function DiffPanel({
 								const hasCollapsedContext =
 									entriesWithCollapsedContext[entry.filename] === true;
 								const fullContextState = fullContextByFilename[entry.filename];
-								const fullContextDiff =
+								const fullContextFiles =
 									fullContextState?.status === "ready"
-										? fullContextState.diff
+										? fullContextState.files
 										: null;
 								const isLoadingFullContext =
 									fullContextState?.status === "loading";
@@ -1529,25 +1603,7 @@ function DiffPanel({
 										/>
 									);
 								};
-								const diffOptions: {
-									diffStyle: "split" | "unified";
-									disableFileHeader: boolean;
-									hunkSeparators: "line-info";
-									expansionLineCount: number;
-									enableLineSelection: boolean;
-									onLineSelectionEnd: (
-										range: {
-											start: number;
-											side?: "deletions" | "additions";
-											end: number;
-											endSide?: "deletions" | "additions";
-										} | null,
-									) => void;
-									onLineNumberClick: (lineEvent: {
-										lineNumber: number;
-										annotationSide: "deletions" | "additions";
-									}) => void;
-								} = {
+								const diffOptions: FileDiffOptions<InlineDiffAnnotation> = {
 									diffStyle: viewMode,
 									disableFileHeader: true,
 									hunkSeparators: "line-info",
@@ -1696,10 +1752,10 @@ function DiffPanel({
 															void loadFullContextForFile(entry.filename)
 														}
 														disabled={
-															isLoadingFullContext || fullContextDiff !== null
+															isLoadingFullContext || fullContextFiles !== null
 														}
 													>
-														{fullContextDiff !== null
+														{fullContextFiles !== null
 															? "Context loaded"
 															: isLoadingFullContext
 																? "Loading context..."
@@ -1736,142 +1792,155 @@ function DiffPanel({
 											<>
 												{entry.patch !== null ? (
 													<div className="overflow-x-auto border-t">
-														{fullContextDiff !== null ? (
-															<FileDiff
-																fileDiff={fullContextDiff}
-																lineAnnotations={[...inlineAnnotations]}
-																renderAnnotation={renderInlineComposer}
-																options={diffOptions}
-															/>
+														{fullContextFiles !== null ? (
+															<MouseDownExpandContainer>
+																<MultiFileDiff
+																	oldFile={fullContextFiles.oldFile}
+																	newFile={fullContextFiles.newFile}
+																	lineAnnotations={[...inlineAnnotations]}
+																	renderAnnotation={renderInlineComposer}
+																	options={diffOptions}
+																/>
+															</MouseDownExpandContainer>
 														) : (
-															<PatchDiff
-																patch={entry.patch}
-																lineAnnotations={[...inlineAnnotations]}
-																renderAnnotation={(annotation) => {
-																	if (annotation.metadata.kind !== "composer") {
-																		return null;
-																	}
-
-																	return (
-																		<InlineReviewCommentComposer
-																			target={annotation.metadata.target}
-																			body={inlineComposerBody}
-																			onBodyChange={setInlineComposerBody}
-																			onSubmit={submitInlineComment}
-																			onCancel={() => {
-																				setInlineComposerTarget(null);
-																				setInlineComposerBody("");
-																				setSelectionNotice(null);
-																			}}
-																			isSubmitting={isPostingInlineComment}
-																			errorMessage={
-																				Result.isFailure(inlineCommentResult)
-																					? extractInteractionError(
-																							inlineCommentResult,
-																							"Could not post inline comment",
-																						)
-																					: null
-																			}
-																		/>
-																	);
-																}}
-																options={{
-																	diffStyle: viewMode,
-																	disableFileHeader: true,
-																	enableLineSelection: true,
-																	onLineSelectionEnd: (range) => {
-																		if (range === null) {
-																			return;
-																		}
-
-																		const normalizedRange: DiffSelectedLineRange =
-																			{
-																				start: range.start,
-																				side: range.side,
-																				end: range.end,
-																				endSide: range.endSide,
-																			};
-
-																		const nextTarget =
-																			buildInlineTargetFromSelection(
-																				entry.filename,
-																				normalizedRange,
-																			);
-
-																		if (nextTarget === null) {
-																			setSelectionNotice(
-																				"Could not determine line side for this selection.",
-																			);
-																			return;
-																		}
-
-																		const minLine = Math.min(
-																			normalizedRange.start,
-																			normalizedRange.end,
-																		);
-																		const maxLine = Math.max(
-																			normalizedRange.start,
-																			normalizedRange.end,
-																		);
-																		const selectedMultipleLines =
-																			minLine !== maxLine;
-
+															<MouseDownExpandContainer>
+																<PatchDiff
+																	patch={entry.patch}
+																	lineAnnotations={[...inlineAnnotations]}
+																	renderAnnotation={(annotation) => {
 																		if (
-																			selectedMultipleLines &&
-																			nextTarget.startLine !== null
+																			annotation.metadata.kind !== "composer"
 																		) {
-																			setSelectionNotice(
-																				`Lines ${String(nextTarget.startLine)}\u2013${String(nextTarget.line)} selected for comment.`,
-																			);
-																		} else if (selectedMultipleLines) {
-																			setSelectionNotice(
-																				"Selection spans both diff sides. Keep the selection on one side for a true multi-line comment.",
-																			);
-																		} else {
-																			setSelectionNotice(null);
+																			return null;
 																		}
 
-																		setInlineComposerTarget((current) => {
-																			if (
-																				inlineTargetsEqual(current, nextTarget)
-																			) {
-																				return current;
+																		return (
+																			<InlineReviewCommentComposer
+																				target={annotation.metadata.target}
+																				body={inlineComposerBody}
+																				onBodyChange={setInlineComposerBody}
+																				onSubmit={submitInlineComment}
+																				onCancel={() => {
+																					setInlineComposerTarget(null);
+																					setInlineComposerBody("");
+																					setSelectionNotice(null);
+																				}}
+																				isSubmitting={isPostingInlineComment}
+																				errorMessage={
+																					Result.isFailure(inlineCommentResult)
+																						? extractInteractionError(
+																								inlineCommentResult,
+																								"Could not post inline comment",
+																							)
+																						: null
+																				}
+																			/>
+																		);
+																	}}
+																	options={{
+																		diffStyle: viewMode,
+																		disableFileHeader: true,
+																		enableLineSelection: true,
+																		onLineSelectionEnd: (range) => {
+																			if (range === null) {
+																				return;
 																			}
-																			setInlineComposerBody("");
-																			return nextTarget;
-																		});
-																	},
-																	onLineNumberClick: (lineEvent) => {
-																		if (lineEvent.lineNumber <= 0) return;
-																		const nextTarget: InlineReviewCommentTarget =
-																			{
-																				filename: entry.filename,
-																				startLine: null,
-																				startSide: null,
-																				line: lineEvent.lineNumber,
-																				side:
-																					lineEvent.annotationSide ===
-																					"deletions"
-																						? "LEFT"
-																						: "RIGHT",
-																			};
 
-																		setSelectionNotice(null);
+																			const normalizedRange: DiffSelectedLineRange =
+																				{
+																					start: range.start,
+																					side: range.side,
+																					end: range.end,
+																					endSide: range.endSide,
+																				};
 
-																		setInlineComposerTarget((current) => {
+																			const nextTarget =
+																				buildInlineTargetFromSelection(
+																					entry.filename,
+																					normalizedRange,
+																				);
+
+																			if (nextTarget === null) {
+																				setSelectionNotice(
+																					"Could not determine line side for this selection.",
+																				);
+																				return;
+																			}
+
+																			const minLine = Math.min(
+																				normalizedRange.start,
+																				normalizedRange.end,
+																			);
+																			const maxLine = Math.max(
+																				normalizedRange.start,
+																				normalizedRange.end,
+																			);
+																			const selectedMultipleLines =
+																				minLine !== maxLine;
+
 																			if (
-																				inlineTargetsEqual(current, nextTarget)
+																				selectedMultipleLines &&
+																				nextTarget.startLine !== null
 																			) {
+																				setSelectionNotice(
+																					`Lines ${String(nextTarget.startLine)}\u2013${String(nextTarget.line)} selected for comment.`,
+																				);
+																			} else if (selectedMultipleLines) {
+																				setSelectionNotice(
+																					"Selection spans both diff sides. Keep the selection on one side for a true multi-line comment.",
+																				);
+																			} else {
+																				setSelectionNotice(null);
+																			}
+
+																			setInlineComposerTarget((current) => {
+																				if (
+																					inlineTargetsEqual(
+																						current,
+																						nextTarget,
+																					)
+																				) {
+																					return current;
+																				}
 																				setInlineComposerBody("");
-																				return null;
-																			}
+																				return nextTarget;
+																			});
+																		},
+																		onLineNumberClick: (lineEvent) => {
+																			if (lineEvent.lineNumber <= 0) return;
+																			const nextTarget: InlineReviewCommentTarget =
+																				{
+																					filename: entry.filename,
+																					startLine: null,
+																					startSide: null,
+																					line: lineEvent.lineNumber,
+																					side:
+																						lineEvent.annotationSide ===
+																						"deletions"
+																							? "LEFT"
+																							: "RIGHT",
+																				};
 
-																			setInlineComposerBody("");
-																			return nextTarget;
-																		});
-																	},
-																}}
-															/>
+																			setSelectionNotice(null);
+
+																			setInlineComposerTarget((current) => {
+																				if (
+																					inlineTargetsEqual(
+																						current,
+																						nextTarget,
+																					)
+																				) {
+																					setInlineComposerBody("");
+																					return null;
+																				}
+
+																				setInlineComposerBody("");
+																				return nextTarget;
+																			});
+																		},
+																	}}
+																/>
+															</MouseDownExpandContainer>
 														)}
 														{fullContextError !== null && (
 															<p className="px-3 py-1.5 text-[10px] text-amber-600 dark:text-amber-400">
@@ -1951,7 +2020,7 @@ function DiffPanel({
 			)}
 		</div>
 	);
-}
+});
 
 function quoteMarkdown(text: string): string {
 	return text
@@ -2347,6 +2416,10 @@ function InfoSidebar({
 	owner,
 	name,
 	prNumber,
+	fileTree,
+	fileCount,
+	focusedFilename,
+	onJumpToFile,
 	reviewDraftReplies,
 	onRemoveDraftReply,
 	onUpdateDraftReplyBody,
@@ -2356,6 +2429,10 @@ function InfoSidebar({
 	owner: string;
 	name: string;
 	prNumber: number;
+	fileTree: Array<FileTreeNode>;
+	fileCount: number;
+	focusedFilename: string | null;
+	onJumpToFile: (filename: string) => void;
 	reviewDraftReplies: ReadonlyArray<DraftReviewReply>;
 	onRemoveDraftReply: (draftReplyId: string) => void;
 	onUpdateDraftReplyBody: (draftReplyId: string, nextBody: string) => void;
@@ -2382,9 +2459,6 @@ function InfoSidebar({
 	const [checkFilter, setCheckFilter] = useState<
 		"all" | "failing" | "pending" | "passing"
 	>("all");
-	const [reviewFilter, setReviewFilter] = useState<
-		"all" | "approved" | "changes" | "commented"
-	>("all");
 
 	const normalizedActivityQuery = activityQuery.trim().toLowerCase();
 
@@ -2408,19 +2482,25 @@ function InfoSidebar({
 		);
 	});
 
-	const visibleReviews = pr.reviews.filter((review) => {
-		const matchesState =
-			reviewFilter === "all"
-				? true
-				: reviewFilter === "approved"
-					? review.state === "APPROVED"
-					: reviewFilter === "changes"
-						? review.state === "CHANGES_REQUESTED"
-						: review.state === "COMMENTED";
+	// Deduplicate reviews: keep only the latest review per author
+	const latestReviewsByAuthor = (() => {
+		const byAuthor = new Map<string, (typeof pr.reviews)[number]>();
+		for (const review of pr.reviews) {
+			const key =
+				review.authorLogin ?? `__unknown_${String(review.githubReviewId)}`;
+			const existing = byAuthor.get(key);
+			if (
+				!existing ||
+				(review.submittedAt ?? 0) > (existing.submittedAt ?? 0)
+			) {
+				byAuthor.set(key, review);
+			}
+		}
+		return [...byAuthor.values()];
+	})();
 
-		if (!matchesState) return false;
+	const visibleReviews = latestReviewsByAuthor.filter((review) => {
 		if (normalizedActivityQuery.length === 0) return true;
-
 		return (
 			(review.authorLogin?.toLowerCase().includes(normalizedActivityQuery) ??
 				false) ||
@@ -2538,6 +2618,24 @@ function InfoSidebar({
 					headSha={pr.headSha}
 				/>
 			</SidebarSection>
+
+			{/* ── Changed files tree ── */}
+			{fileCount > 0 && (
+				<SidebarSection>
+					<SidebarHeading count={fileCount}>Changed files</SidebarHeading>
+					<div className="max-h-72 overflow-y-auto -mx-1">
+						{fileTree.map((node) => (
+							<FileTreeItem
+								key={node.fullPath}
+								node={node}
+								focusedFilename={focusedFilename}
+								onJumpToFile={onJumpToFile}
+								depth={0}
+							/>
+						))}
+					</div>
+				</SidebarSection>
+			)}
 
 			{/* ── Draft replies ── */}
 			{orderedDraftReplies.length > 0 && (
@@ -2709,74 +2807,19 @@ function InfoSidebar({
 						</SidebarSection>
 					)}
 
-					{/* Reviews */}
+					{/* Reviews — compact per-reviewer chips */}
 					{pr.reviews.length > 0 && (
 						<SidebarSection>
-							<div className="flex items-center justify-between mb-2">
-								<SidebarHeading count={visibleReviews.length}>
-									Reviews
-								</SidebarHeading>
-								<div className="flex items-center gap-0.5">
-									{(
-										[
-											["all", "All"],
-											["approved", "Appr"],
-											["changes", "Chng"],
-											["commented", "Cmnt"],
-										] as const
-									).map(([value, label]) => (
-										<button
-											key={value}
-											type="button"
-											onClick={() => setReviewFilter(value)}
-											className={cn(
-												"rounded px-1.5 py-0.5 text-xs transition-colors cursor-pointer",
-												reviewFilter === value
-													? "bg-foreground/10 text-foreground font-medium"
-													: "text-muted-foreground/60 hover:text-muted-foreground",
-											)}
-										>
-											{label}
-										</button>
-									))}
-								</div>
-							</div>
+							<SidebarHeading>Reviews</SidebarHeading>
 							{visibleReviews.length > 0 ? (
-								<div className="space-y-1.5">
+								<div className="flex flex-wrap gap-1.5">
 									{visibleReviews.map((review) => (
-										<div
-											key={review.githubReviewId}
-											className="flex items-center gap-2 rounded-md border px-2.5 py-2"
-										>
-											{review.authorLogin && (
-												<Avatar className="size-5">
-													<AvatarImage
-														src={review.authorAvatarUrl ?? undefined}
-													/>
-													<AvatarFallback className="text-[9px]">
-														{review.authorLogin[0]?.toUpperCase()}
-													</AvatarFallback>
-												</Avatar>
-											)}
-											<span className="text-xs font-medium truncate flex-1">
-												{review.authorLogin ?? "Unknown"}
-											</span>
-											<ReviewStateBadge state={review.state} />
-											<ReviewOptimisticBadge
-												optimisticState={review.optimisticState}
-												optimisticErrorMessage={review.optimisticErrorMessage}
-											/>
-											{review.submittedAt && (
-												<span className="text-xs text-muted-foreground/50 tabular-nums shrink-0">
-													{formatRelative(review.submittedAt)}
-												</span>
-											)}
-										</div>
+										<ReviewerChip key={review.githubReviewId} review={review} />
 									))}
 								</div>
 							) : (
 								<p className="text-xs text-muted-foreground/60 py-1">
-									No reviews match filters.
+									No reviews match.
 								</p>
 							)}
 						</SidebarSection>
@@ -3410,6 +3453,87 @@ function MergeableStateBadge({ state }: { state: string }) {
 		<Badge variant={c.variant} className={cn("text-xs", c.className)}>
 			{c.label}
 		</Badge>
+	);
+}
+
+/**
+ * Compact chip showing a reviewer's avatar with a small colored status dot.
+ * Tooltip reveals the full name, state, and relative time on hover.
+ */
+function ReviewerChip({
+	review,
+}: {
+	review: {
+		readonly githubReviewId: number;
+		readonly authorLogin: string | null;
+		readonly authorAvatarUrl: string | null;
+		readonly state: string;
+		readonly submittedAt: number | null;
+		readonly optimisticState: "pending" | "failed" | "confirmed" | null;
+		readonly optimisticErrorMessage: string | null;
+	};
+}) {
+	const stateConfig: Record<string, { dotClass: string; label: string }> = {
+		APPROVED: {
+			dotClass: "bg-green-500",
+			label: "Approved",
+		},
+		CHANGES_REQUESTED: {
+			dotClass: "bg-red-500",
+			label: "Changes requested",
+		},
+		COMMENTED: {
+			dotClass: "bg-muted-foreground",
+			label: "Commented",
+		},
+		DISMISSED: {
+			dotClass: "bg-muted-foreground/50",
+			label: "Dismissed",
+		},
+		PENDING: {
+			dotClass: "border border-muted-foreground bg-transparent",
+			label: "Pending",
+		},
+	};
+	const config = stateConfig[review.state] ?? {
+		dotClass: "bg-muted-foreground",
+		label: review.state,
+	};
+
+	const tooltipLabel = [
+		review.authorLogin ?? "Unknown",
+		config.label,
+		review.submittedAt ? formatRelative(review.submittedAt) : null,
+	]
+		.filter(Boolean)
+		.join(" \u00B7 ");
+
+	return (
+		<TooltipTrigger asChild>
+			<div className="relative inline-flex shrink-0">
+				<Avatar className="size-6">
+					<AvatarImage src={review.authorAvatarUrl ?? undefined} />
+					<AvatarFallback className="text-[10px]">
+						{(review.authorLogin ?? "?")[0]?.toUpperCase()}
+					</AvatarFallback>
+				</Avatar>
+				{/* Status dot */}
+				<span
+					className={cn(
+						"absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-background",
+						config.dotClass,
+					)}
+				/>
+				{/* Optimistic indicator */}
+				{review.optimisticState === "pending" && (
+					<span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-yellow-500 ring-1 ring-background animate-pulse" />
+				)}
+				{review.optimisticState === "failed" && (
+					<span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-red-500 ring-1 ring-background" />
+				)}
+				<TooltipContent>{tooltipLabel}</TooltipContent>
+			</div>
+		</TooltipTrigger>
 	);
 }
 

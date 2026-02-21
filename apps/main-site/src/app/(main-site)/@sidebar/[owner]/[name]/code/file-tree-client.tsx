@@ -4,7 +4,7 @@ import { Result, useAtomValue } from "@effect-atom/atom-react";
 import { Link } from "@packages/ui/components/link";
 import { cn } from "@packages/ui/lib/utils";
 import { useCodeBrowse } from "@packages/ui/rpc/code-browse";
-import { Option } from "effect";
+import { Either, Option, Schema } from "effect";
 import { ChevronRight, File, Folder, Loader2 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useMemo, useState } from "react";
@@ -18,14 +18,36 @@ type TreeNode = {
 	readonly path: string;
 	readonly type: "blob" | "tree";
 	readonly children: Array<TreeNode>;
+	readonly read: boolean;
 };
 
 type FlatEntry = {
 	readonly path: string;
 	readonly type: "blob" | "tree" | "commit";
+	readonly sha: string;
 };
 
-function buildTree(entries: ReadonlyArray<FlatEntry>): Array<TreeNode> {
+type ReadState = {
+	readonly path: string;
+	readonly fileSha: string;
+	readonly readAt: number;
+};
+
+const ReadStateSchema = Schema.Array(
+	Schema.Struct({
+		path: Schema.String,
+		fileSha: Schema.String,
+		readAt: Schema.Number,
+	}),
+);
+
+function buildTree(
+	entries: ReadonlyArray<FlatEntry>,
+	readStates: ReadonlyArray<ReadState>,
+): Array<TreeNode> {
+	const readStateByPath = new Map(
+		readStates.map((state) => [state.path, state.fileSha]),
+	);
 	const root: Array<TreeNode> = [];
 	const dirs = new Map<string, TreeNode>();
 
@@ -35,7 +57,13 @@ function buildTree(entries: ReadonlyArray<FlatEntry>): Array<TreeNode> {
 
 		const parts = dirPath.split("/");
 		const name = parts[parts.length - 1] ?? dirPath;
-		const node: TreeNode = { name, path: dirPath, type: "tree", children: [] };
+		const node: TreeNode = {
+			name,
+			path: dirPath,
+			type: "tree",
+			children: [],
+			read: false,
+		};
 		dirs.set(dirPath, node);
 
 		if (parts.length > 1) {
@@ -58,11 +86,13 @@ function buildTree(entries: ReadonlyArray<FlatEntry>): Array<TreeNode> {
 		} else {
 			const parts = entry.path.split("/");
 			const name = parts[parts.length - 1] ?? entry.path;
+			const isRead = readStateByPath.get(entry.path) === entry.sha;
 			const fileNode: TreeNode = {
 				name,
 				path: entry.path,
 				type: "blob",
 				children: [],
+				read: isRead,
 			};
 
 			if (parts.length > 1) {
@@ -110,12 +140,14 @@ function TreeNodeItem({
 	name,
 	activePath,
 	depth,
+	treeSha,
 }: {
 	node: TreeNode;
 	owner: string;
 	name: string;
 	activePath: string | null;
 	depth: number;
+	treeSha: string;
 }) {
 	const [expanded, setExpanded] = useState(
 		// Auto-expand if the active file is within this folder
@@ -155,6 +187,7 @@ function TreeNodeItem({
 								name={name}
 								activePath={activePath}
 								depth={depth + 1}
+								treeSha={treeSha}
 							/>
 						))}
 					</div>
@@ -164,10 +197,11 @@ function TreeNodeItem({
 	}
 
 	const isActive = activePath === node.path;
+	const fileClass = node.read ? "text-muted-foreground/50" : "text-foreground";
 
 	return (
 		<Link
-			href={`/${owner}/${name}/code?path=${encodeURIComponent(node.path)}`}
+			href={`/${owner}/${name}/code?path=${encodeURIComponent(node.path)}&treeSha=${encodeURIComponent(treeSha)}`}
 			className={cn(
 				"flex w-full items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] transition-colors no-underline",
 				isActive
@@ -176,8 +210,11 @@ function TreeNodeItem({
 			)}
 			style={{ paddingLeft: `${depth * 12 + 6 + 16}px` }}
 		>
-			<File className="size-3 shrink-0 text-muted-foreground/60" />
-			<span className="truncate">{node.name}</span>
+			{!node.read && (
+				<span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
+			)}
+			<File className={cn("size-3 shrink-0", fileClass)} />
+			<span className={cn("truncate", fileClass)}>{node.name}</span>
 		</Link>
 	);
 }
@@ -202,15 +239,47 @@ export function FileTreeClient({
 	const treeResult = useAtomValue(treeAtom);
 	const searchParams = useSearchParams();
 	const activePath = searchParams.get("path");
+	const treeValueOption = Result.value(treeResult);
+	const treeSha = useMemo(
+		() => (Option.isSome(treeValueOption) ? treeValueOption.value.sha : "HEAD"),
+		[treeValueOption],
+	);
+
+	const fileReadStateAtom = useMemo(
+		() =>
+			client.getFileReadState.query({
+				ownerLogin: owner,
+				name,
+				treeSha,
+			}),
+		[client, owner, name, treeSha],
+	);
+	const fileReadStateResult = useAtomValue(fileReadStateAtom);
+	const fileReadStates: Array<ReadState> = useMemo<Array<ReadState>>(() => {
+		const readStateOption = Result.value(fileReadStateResult);
+		if (Option.isNone(readStateOption)) return [];
+
+		const result = Schema.decodeUnknownEither(ReadStateSchema)(
+			readStateOption.value,
+		);
+		return Either.match(result, {
+			onLeft: () => [],
+			onRight: (states) =>
+				[...states].map((state) => ({
+					path: state.path,
+					fileSha: state.fileSha,
+					readAt: state.readAt,
+				})),
+		});
+	}, [fileReadStateResult]);
 
 	const isLoading = Result.isWaiting(treeResult);
 	const isInitial = Result.isInitial(treeResult);
 
 	const tree = useMemo(() => {
-		const valueOption = Result.value(treeResult);
-		if (Option.isNone(valueOption)) return null;
-		return buildTree(valueOption.value.tree);
-	}, [treeResult]);
+		if (Option.isNone(treeValueOption)) return null;
+		return buildTree(treeValueOption.value.tree, fileReadStates);
+	}, [treeValueOption, fileReadStates]);
 
 	const errorOption = Result.error(treeResult);
 	const hasError = Option.isSome(errorOption);
@@ -257,6 +326,7 @@ export function FileTreeClient({
 					name={name}
 					activePath={activePath}
 					depth={0}
+					treeSha={treeSha}
 				/>
 			))}
 		</div>
