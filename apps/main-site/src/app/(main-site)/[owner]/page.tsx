@@ -80,9 +80,9 @@ async function OrgDetailShell({
 				<div className="mb-4">{commandPalette}</div>
 				<SignInCta />
 				<div className="grid gap-4 lg:grid-cols-3">
-					{prColumn}
-					{issuesColumn}
-					{reposColumn}
+					<div key="pr">{prColumn}</div>
+					<div key="issues">{issuesColumn}</div>
+					<div key="repos">{reposColumn}</div>
 				</div>
 			</div>
 		</div>

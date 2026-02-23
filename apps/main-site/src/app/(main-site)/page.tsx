@@ -41,7 +41,7 @@ async function DashboardShell({
 
 	return (
 		<div className="h-full overflow-y-auto bg-dotgrid">
-			<div className="mx-auto max-w-[1600px] px-4 py-4 md:px-6 md:py-5">
+			<div className="mx-auto max-w-400 px-4 py-4 md:px-6 md:py-5">
 				{/* Command palette */}
 				<div className="mb-4">{commandPalette}</div>
 
@@ -50,9 +50,9 @@ async function DashboardShell({
 
 				{/* Three-column grid */}
 				<div className="grid gap-4 lg:grid-cols-3">
-					{prColumn}
-					{issuesColumn}
-					{reposColumn}
+					<div key="pr">{prColumn}</div>
+					<div key="issues">{issuesColumn}</div>
+					<div key="repos">{reposColumn}</div>
 				</div>
 			</div>
 		</div>
