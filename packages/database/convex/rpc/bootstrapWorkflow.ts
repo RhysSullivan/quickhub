@@ -17,6 +17,9 @@ import { internal } from "../_generated/api";
 import { internalMutation, internalQuery } from "../_generated/server";
 import { workflow } from "../shared/workflow";
 
+const PR_ISSUE_PROGRESS_UPDATE_EVERY_CHUNKS = 5;
+const CHECK_RUN_PROGRESS_UPDATE_EVERY_CHUNKS = 5;
+
 // ---------------------------------------------------------------------------
 // Workflow definition
 // ---------------------------------------------------------------------------
@@ -94,11 +97,13 @@ export const bootstrapRepo = workflow.define({
 				prCursor = result.nextCursor;
 				chunkIndex++;
 				if (prCursor !== null) {
-					// Update progress mid-chunk so the UI shows items flowing in
-					await step.runMutation(progress, {
-						lockKey: args.lockKey,
-						currentStep: `Fetching pull requests (${totalPrs} so far)`,
-					});
+					// Throttle progress writes to reduce mutation churn for large installs.
+					if (chunkIndex % PR_ISSUE_PROGRESS_UPDATE_EVERY_CHUNKS === 0) {
+						await step.runMutation(progress, {
+							lockKey: args.lockKey,
+							currentStep: `Fetching pull requests (${totalPrs} so far)`,
+						});
+					}
 				}
 				if (prCursor === null) break;
 			}
@@ -137,10 +142,12 @@ export const bootstrapRepo = workflow.define({
 				issueCursor = result.nextCursor;
 				chunkIndex++;
 				if (issueCursor !== null) {
-					await step.runMutation(progress, {
-						lockKey: args.lockKey,
-						currentStep: `Fetching issues (${totalIssues} so far)`,
-					});
+					if (chunkIndex % PR_ISSUE_PROGRESS_UPDATE_EVERY_CHUNKS === 0) {
+						await step.runMutation(progress, {
+							lockKey: args.lockKey,
+							currentStep: `Fetching issues (${totalIssues} so far)`,
+						});
+					}
 				}
 				if (issueCursor === null) break;
 			}
@@ -210,7 +217,10 @@ export const bootstrapRepo = workflow.define({
 					{ name: `fetch-check-runs-${chunkIdx}` },
 				);
 				totalCheckRuns += result.count;
-				if (i + CHECK_RUN_CHUNK_SIZE < uniqueShas.length) {
+				if (
+					i + CHECK_RUN_CHUNK_SIZE < uniqueShas.length &&
+					(chunkIdx + 1) % CHECK_RUN_PROGRESS_UPDATE_EVERY_CHUNKS === 0
+				) {
 					await step.runMutation(progress, {
 						lockKey: args.lockKey,
 						currentStep: `Analyzing check runs (${totalCheckRuns} found, ${Math.min(i + CHECK_RUN_CHUNK_SIZE, uniqueShas.length)}/${uniqueShas.length} PRs)`,
@@ -289,9 +299,9 @@ export const bootstrapRepo = workflow.define({
 /**
  * Max concurrent bootstrap workflows per GitHub installation.
  * With ~5-10 API calls per step and 9 steps, a repo uses ~50-100 requests.
- * At 10 parallel, that's 500-1,000 req burst — well within the 5k/hr limit.
+ * At 25 parallel, that's 1,250-2,500 req burst — well within the 5k/hr limit.
  */
-const MAX_PER_INSTALLATION = 10;
+const MAX_PER_INSTALLATION = 25;
 
 // ---------------------------------------------------------------------------
 // startBootstrap — Called from Confect mutations to kick off the workflow.
@@ -327,17 +337,21 @@ export const startBootstrap = internalMutation({
 			return null;
 		}
 
-		// Mark job as running before starting the workflow
+		// Mark job as running before starting the workflow. If it's already
+		// running/done/failed, no-op so duplicate schedulings don't start
+		// duplicate workflows.
 		const job = await ctx.db
 			.query("github_sync_jobs")
 			.withIndex("by_lockKey", (q) => q.eq("lockKey", args.lockKey))
 			.first();
-		if (job && job.state === "pending") {
-			await ctx.db.patch(job._id, {
-				state: "running",
-				updatedAt: Date.now(),
-			});
+		if (!job || job.state !== "pending") {
+			return null;
 		}
+
+		await ctx.db.patch(job._id, {
+			state: "running",
+			updatedAt: Date.now(),
+		});
 
 		await workflow.start(
 			ctx,
@@ -448,45 +462,60 @@ export const onBootstrapComplete = internalMutation({
 });
 
 /**
- * Drain the next pending sync job for the given installation.
- * Schedules `startBootstrap` which does its own concurrency check before
- * actually starting the workflow.
+ * Drain pending sync jobs for the given installation up to available capacity.
+ * Schedules `startBootstrap` for each selected job; `startBootstrap` enforces
+ * the final concurrency/state checks before starting workflows.
  */
 export const drainPendingForInstallation = internalMutation({
 	args: { installationId: v.number() },
 	returns: v.null(),
 	handler: async (ctx, args): Promise<null> => {
-		const pendingJob = await ctx.db
+		const runningJobs = await ctx.db
 			.query("github_sync_jobs")
 			.withIndex("by_installationId_and_state", (q) =>
-				q.eq("installationId", args.installationId).eq("state", "pending"),
+				q.eq("installationId", args.installationId).eq("state", "running"),
 			)
-			.first();
+			.take(MAX_PER_INSTALLATION + 1);
 
-		if (!pendingJob || pendingJob.repositoryId === null) return null;
+		const availableSlots = MAX_PER_INSTALLATION - runningJobs.length;
+		if (availableSlots <= 0) return null;
 
-		// Look up the repo to get fullName and connectedByUserId
-		const repo = await ctx.db
-			.query("github_repositories")
-			.withIndex("by_githubRepoId", (q) =>
-				q.eq("githubRepoId", pendingJob.repositoryId!),
+		const pendingJobs = await ctx.db
+			.query("github_sync_jobs")
+			.withIndex(
+				"by_installationId_and_state_and_prioritySortKey_and_createdAt",
+				(q) =>
+					q.eq("installationId", args.installationId).eq("state", "pending"),
 			)
-			.first();
+			.take(availableSlots * 3);
 
-		if (!repo) return null;
+		let scheduledCount = 0;
+		for (const pendingJob of pendingJobs) {
+			if (scheduledCount >= availableSlots) break;
+			const repositoryId = pendingJob.repositoryId;
+			if (repositoryId === null) continue;
 
-		// Schedule startBootstrap (which will do its own concurrency check)
-		await ctx.scheduler.runAfter(
-			0,
-			internal.rpc.bootstrapWorkflow.startBootstrap,
-			{
-				repositoryId: repo.githubRepoId,
-				fullName: repo.fullName,
-				lockKey: pendingJob.lockKey,
-				connectedByUserId: repo.connectedByUserId ?? null,
-				installationId: args.installationId,
-			},
-		);
+			const repo = await ctx.db
+				.query("github_repositories")
+				.withIndex("by_githubRepoId", (q) => q.eq("githubRepoId", repositoryId))
+				.first();
+
+			if (!repo) continue;
+
+			await ctx.scheduler.runAfter(
+				0,
+				internal.rpc.bootstrapWorkflow.startBootstrap,
+				{
+					repositoryId: repo.githubRepoId,
+					fullName: repo.fullName,
+					lockKey: pendingJob.lockKey,
+					connectedByUserId: repo.connectedByUserId ?? null,
+					installationId: args.installationId,
+				},
+			);
+			scheduledCount++;
+		}
+
 		return null;
 	},
 });

@@ -280,7 +280,7 @@ function NewIssueForm({
 	const router = useRouter();
 	const writeClient = useGithubWrite();
 	const [createIssueResult, createIssue] = useAtom(
-		writeClient.createIssue.mutate,
+		writeClient.createIssue.call,
 		{ mode: "promise" },
 	);
 	const correlationPrefix = useId();

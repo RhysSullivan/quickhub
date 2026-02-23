@@ -324,6 +324,7 @@ export const fetchPullRequestsChunk = internalAction({
 				await ctx.runMutation(internal.rpc.bootstrapWrite.upsertPullRequests, {
 					repositoryId: args.repositoryId,
 					pullRequests: pullRequests.slice(i, i + 50),
+					skipProjections: true,
 				});
 			}
 
@@ -447,6 +448,7 @@ export const fetchIssuesChunk = internalAction({
 				await ctx.runMutation(internal.rpc.bootstrapWrite.upsertIssues, {
 					repositoryId: args.repositoryId,
 					issues: issues.slice(i, i + 50),
+					skipProjections: true,
 				});
 			}
 

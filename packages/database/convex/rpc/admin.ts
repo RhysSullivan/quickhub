@@ -736,8 +736,13 @@ upsertInstallationReposDef.implement((args) =>
 		const now = Date.now();
 		let newRepoCount = 0;
 		let updatedRepoCount = 0;
+		const reposByPriority = [...args.repos].sort((a, b) => {
+			const starDelta = b.stargazersCount - a.stargazersCount;
+			if (starDelta !== 0) return starDelta;
+			return a.fullName.localeCompare(b.fullName);
+		});
 
-		for (const repo of args.repos) {
+		for (const repo of reposByPriority) {
 			const existingRepo = yield* ctx.db
 				.query("github_repositories")
 				.withIndex("by_githubRepoId", (q) =>
@@ -775,6 +780,7 @@ upsertInstallationReposDef.implement((args) =>
 					.first();
 
 				if (Option.isNone(existingJob)) {
+					const prioritySortKey = -repo.stargazersCount;
 					yield* ctx.db.insert("github_sync_jobs", {
 						jobType: "backfill",
 						scopeType: "repository",
@@ -790,6 +796,7 @@ upsertInstallationReposDef.implement((args) =>
 						currentStep: null,
 						completedSteps: [],
 						itemsFetched: 0,
+						prioritySortKey,
 						createdAt: now,
 						updatedAt: now,
 					});

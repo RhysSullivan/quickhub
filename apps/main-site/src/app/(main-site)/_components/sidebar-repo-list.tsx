@@ -11,6 +11,7 @@ import {
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from "@packages/ui/components/collapsible";
+import { useConvexAuthState } from "@packages/ui/components/convex-client-provider";
 import { ChevronRight } from "@packages/ui/components/icons";
 import { Link } from "@packages/ui/components/link";
 import { Skeleton } from "@packages/ui/components/skeleton";
@@ -37,10 +38,14 @@ export function SidebarRepoList({
 	activeName?: string | null;
 }) {
 	const session = authClient.useSession();
+	const { isReadyForQueries } = useConvexAuthState();
 	const client = useProjectionQueries();
 	const reposAtom = useMemo(
-		() => client.listRepos.subscription(EmptyPayload),
-		[client],
+		() =>
+			client.listRepos.subscription(EmptyPayload, {
+				enabled: isReadyForQueries,
+			}),
+		[client, isReadyForQueries],
 	);
 	const result = useAtomValue(reposAtom);
 

@@ -11,7 +11,14 @@ import { authClient } from "@packages/ui/lib/auth-client";
 import { ConvexClient as ConvexBrowserClient } from "convex/browser";
 import type { FunctionReference, FunctionReturnType } from "convex/server";
 import { Duration, Effect, Layer, Stream } from "effect";
-import { type ReactNode, useEffect, useRef } from "react";
+import {
+	createContext,
+	type ReactNode,
+	useContext,
+	useEffect,
+	useMemo,
+	useState,
+} from "react";
 
 const CONVEX_URL = process.env.NEXT_PUBLIC_CONVEX_URL!;
 
@@ -87,19 +94,43 @@ const AppConvexClientLayer = Layer.mergeAll(
 export const atomRuntime = Atom.runtime(AppConvexClientLayer);
 
 /**
- * Syncs Better Auth session state to the shared Convex client.
- * When signed in, sets a token fetcher that gets JWTs from `/convex/token`.
- * When signed out, clears auth.
+ * Query gating state for Convex-backed atoms.
+ *
+ * `isReadyForQueries` only flips true after auth is fully resolved AND
+ * the Convex client has been configured with the current auth mode.
  */
-function ConvexAuthSync() {
+type ConvexAuthState = {
+	readonly isAuthResolved: boolean;
+	readonly isConvexAuthSynced: boolean;
+	readonly isReadyForQueries: boolean;
+};
+
+const ConvexAuthStateContext = createContext<ConvexAuthState | null>(null);
+
+export const useConvexAuthState = (): ConvexAuthState => {
+	const value = useContext(ConvexAuthStateContext);
+	if (value === null) {
+		throw new Error(
+			"useConvexAuthState must be used inside ConvexClientProvider",
+		);
+	}
+	return value;
+};
+
+export function ConvexClientProvider({ children }: { children: ReactNode }) {
 	const { data: session, isPending } = authClient.useSession();
 	const sessionId = session?.session?.id;
-	const prevSessionIdRef = useRef<string | undefined>(undefined);
+	const [isConvexAuthSynced, setConvexAuthSynced] = useState(false);
 
 	useEffect(() => {
-		if (isPending) return;
+		if (isPending) {
+			setConvexAuthSynced(false);
+			return;
+		}
 
-		if (sessionId && sessionId !== prevSessionIdRef.current) {
+		setConvexAuthSynced(false);
+
+		if (sessionId) {
 			convexBrowserClient.setAuth(async () => {
 				try {
 					const { data } = await authClient.convex.token();
@@ -108,21 +139,27 @@ function ConvexAuthSync() {
 					return null;
 				}
 			});
-		} else if (!sessionId && prevSessionIdRef.current) {
+		} else {
 			convexBrowserClient.setAuth(async () => null);
 		}
 
-		prevSessionIdRef.current = sessionId ?? undefined;
+		setConvexAuthSynced(true);
 	}, [isPending, sessionId]);
 
-	return null;
-}
+	const authState = useMemo<ConvexAuthState>(
+		() => ({
+			isAuthResolved: !isPending,
+			isConvexAuthSynced,
+			isReadyForQueries: !isPending && isConvexAuthSynced,
+		}),
+		[isPending, isConvexAuthSynced],
+	);
 
-export function ConvexClientProvider({ children }: { children: ReactNode }) {
 	return (
 		<RegistryProvider defaultIdleTTL={30_000}>
-			<ConvexAuthSync />
-			{children}
+			<ConvexAuthStateContext.Provider value={authState}>
+				{children}
+			</ConvexAuthStateContext.Provider>
 		</RegistryProvider>
 	);
 }

@@ -1,8 +1,5 @@
-import { Skeleton } from "@packages/ui/components/skeleton";
 import { cacheLife } from "next/cache";
-import { type ReactNode, Suspense } from "react";
-import { serverQueries } from "@/lib/server-queries";
-import type { DashboardData } from "./_components/home-dashboard-client";
+import type { ReactNode } from "react";
 import {
 	CommandPaletteClient,
 	IssuesColumnClient,
@@ -19,26 +16,10 @@ import {
 export default function HomePage() {
 	return (
 		<DashboardShell
-			commandPalette={
-				<Suspense fallback={<Skeleton className="h-10 w-full rounded-lg" />}>
-					<CommandPaletteSection />
-				</Suspense>
-			}
-			prColumn={
-				<Suspense fallback={<ColumnSkeleton />}>
-					<PrColumnSection />
-				</Suspense>
-			}
-			issuesColumn={
-				<Suspense fallback={<ColumnSkeleton />}>
-					<IssuesColumnSection />
-				</Suspense>
-			}
-			reposColumn={
-				<Suspense fallback={<ColumnSkeleton />}>
-					<ReposColumnSection />
-				</Suspense>
-			}
+			commandPalette={<CommandPaletteClient query={{}} />}
+			prColumn={<PrColumnClient query={{}} />}
+			issuesColumn={<IssuesColumnClient query={{}} />}
+			reposColumn={<ReposColumnClient query={{}} />}
 		/>
 	);
 }
@@ -74,47 +55,6 @@ async function DashboardShell({
 					<div key="repos">{reposColumn}</div>
 				</div>
 			</div>
-		</div>
-	);
-}
-
-// ---------------------------------------------------------------------------
-// Async server components — each fetches the same (deduped) query
-// ---------------------------------------------------------------------------
-
-async function fetchDashboard(): Promise<DashboardData> {
-	return serverQueries.getHomeDashboard.queryPromise({});
-}
-
-async function CommandPaletteSection() {
-	const data = await fetchDashboard();
-	return <CommandPaletteClient initialData={data} query={{}} />;
-}
-
-async function PrColumnSection() {
-	const data = await fetchDashboard();
-	return <PrColumnClient initialData={data} query={{}} />;
-}
-
-async function IssuesColumnSection() {
-	const data = await fetchDashboard();
-	return <IssuesColumnClient initialData={data} query={{}} />;
-}
-
-async function ReposColumnSection() {
-	const data = await fetchDashboard();
-	return <ReposColumnClient initialData={data} query={{}} />;
-}
-
-// ---------------------------------------------------------------------------
-// Skeleton
-// ---------------------------------------------------------------------------
-
-function ColumnSkeleton() {
-	return (
-		<div className="space-y-0">
-			<Skeleton className="mb-1.5 h-4 w-28" />
-			<Skeleton className="h-72 rounded-lg" />
 		</div>
 	);
 }

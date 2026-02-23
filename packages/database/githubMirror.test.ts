@@ -1624,7 +1624,7 @@ describe("Optimistic Write Operations", () => {
 			yield* seedRepository(t, repositoryId);
 
 			const result = yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.createIssue, {
+				client.action(api.rpc.githubWrite.createIssue, {
 					correlationId: "corr-issue-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -1662,7 +1662,7 @@ describe("Optimistic Write Operations", () => {
 			yield* seedRepository(t, repositoryId);
 
 			const result = yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.createComment, {
+				client.action(api.rpc.githubWrite.createComment, {
 					correlationId: "corr-comment-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -1704,7 +1704,7 @@ describe("Optimistic Write Operations", () => {
 
 			// Create a pending write op
 			yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.createComment, {
+				client.action(api.rpc.githubWrite.createComment, {
 					correlationId: "corr-complete-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -1744,7 +1744,7 @@ describe("Optimistic Write Operations", () => {
 			yield* seedRepository(t, repositoryId);
 
 			yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.createComment, {
+				client.action(api.rpc.githubWrite.createComment, {
 					correlationId: "corr-fail-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -1788,7 +1788,7 @@ describe("Optimistic Write Operations", () => {
 
 			// Create a pending write op for creating issue #99
 			yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.createIssue, {
+				client.action(api.rpc.githubWrite.createIssue, {
 					correlationId: "corr-confirm-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -1850,7 +1850,7 @@ describe("Optimistic Write Operations", () => {
 
 			// Create two write ops
 			yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.createIssue, {
+				client.action(api.rpc.githubWrite.createIssue, {
 					correlationId: "corr-list-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -1861,7 +1861,7 @@ describe("Optimistic Write Operations", () => {
 			yield* Effect.promise(() => client.finishInProgressScheduledFunctions());
 
 			yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.createComment, {
+				client.action(api.rpc.githubWrite.createComment, {
 					correlationId: "corr-list-2",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -1897,7 +1897,7 @@ describe("Optimistic Write Operations", () => {
 			yield* seedRepository(t, repositoryId);
 
 			const result = yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.updateIssueState, {
+				client.action(api.rpc.githubWrite.updateIssueState, {
 					correlationId: "corr-close-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -1938,7 +1938,7 @@ describe("Optimistic Write Operations", () => {
 			yield* seedRepository(t, repositoryId);
 
 			const result = yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.mergePullRequest, {
+				client.action(api.rpc.githubWrite.mergePullRequest, {
 					correlationId: "corr-merge-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -1981,7 +1981,7 @@ describe("Optimistic Write Operations", () => {
 				yield* seedRepository(t, repositoryId);
 
 				const result = yield* Effect.promise(() =>
-					client.mutation(api.rpc.githubWrite.updatePullRequestBranch, {
+					client.action(api.rpc.githubWrite.updatePullRequestBranch, {
 						correlationId: "corr-update-branch-1",
 						ownerLogin: "testowner",
 						name: "testrepo",
@@ -2024,7 +2024,7 @@ describe("Optimistic Write Operations", () => {
 			yield* seedRepository(t, repositoryId);
 
 			const result = yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.submitPrReview, {
+				client.action(api.rpc.githubWrite.submitPrReview, {
 					correlationId: "corr-review-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -2068,7 +2068,7 @@ describe("Optimistic Write Operations", () => {
 				yield* seedRepository(t, repositoryId);
 
 				const result = yield* Effect.promise(() =>
-					client.mutation(api.rpc.githubWrite.updateLabels, {
+					client.action(api.rpc.githubWrite.updateLabels, {
 						correlationId: "corr-labels-1",
 						ownerLogin: "testowner",
 						name: "testrepo",
@@ -2127,7 +2127,7 @@ describe("Optimistic Write Operations", () => {
 				);
 
 				const result = yield* Effect.promise(() =>
-					client.mutation(api.rpc.githubWrite.updateAssignees, {
+					client.action(api.rpc.githubWrite.updateAssignees, {
 						correlationId: "corr-assignees-1",
 						ownerLogin: "testowner",
 						name: "testrepo",
@@ -2171,7 +2171,7 @@ describe("Optimistic Write Operations", () => {
 			yield* seedRepository(t, repositoryId);
 
 			yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.updateLabels, {
+				client.action(api.rpc.githubWrite.updateLabels, {
 					correlationId: "corr-confirm-labels-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -2241,7 +2241,7 @@ describe("Optimistic Write Operations", () => {
 			);
 
 			yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.updateAssignees, {
+				client.action(api.rpc.githubWrite.updateAssignees, {
 					correlationId: "corr-confirm-assignees-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -2298,7 +2298,7 @@ describe("Optimistic Write Operations", () => {
 			yield* seedRepository(t, repositoryId);
 
 			yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.submitPrReview, {
+				client.action(api.rpc.githubWrite.submitPrReview, {
 					correlationId: "corr-confirm-review-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -2356,7 +2356,7 @@ describe("Optimistic Write Operations", () => {
 
 			// First write succeeds
 			yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.createIssue, {
+				client.action(api.rpc.githubWrite.createIssue, {
 					correlationId: "corr-dupe-1",
 					ownerLogin: "testowner",
 					name: "testrepo",
@@ -2368,7 +2368,7 @@ describe("Optimistic Write Operations", () => {
 
 			// Second write with same correlationId
 			const result = yield* Effect.promise(() =>
-				client.mutation(api.rpc.githubWrite.createIssue, {
+				client.action(api.rpc.githubWrite.createIssue, {
 					correlationId: "corr-dupe-1",
 					ownerLogin: "testowner",
 					name: "testrepo",

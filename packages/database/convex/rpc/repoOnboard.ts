@@ -146,6 +146,7 @@ insertRepoAndBootstrapDef.implement((args) =>
 		let bootstrapScheduled = false;
 
 		if (Option.isNone(existingJob)) {
+			const prioritySortKey = -(args.stargazersCount ?? 0);
 			yield* ctx.db.insert("github_sync_jobs", {
 				jobType: "backfill",
 				scopeType: "repository",
@@ -161,6 +162,7 @@ insertRepoAndBootstrapDef.implement((args) =>
 				currentStep: null,
 				completedSteps: [],
 				itemsFetched: 0,
+				prioritySortKey,
 				createdAt: now,
 				updatedAt: now,
 			});

@@ -1014,8 +1014,14 @@ const handleInstallationEvent = (
 		) =>
 			Effect.gen(function* () {
 				let newRepoCount = 0;
+				const repositoriesByPriority = [...repositories].sort((a, b) => {
+					const starDelta =
+						(b.stargazers_count ?? 0) - (a.stargazers_count ?? 0);
+					if (starDelta !== 0) return starDelta;
+					return a.full_name.localeCompare(b.full_name);
+				});
 
-				for (const repo of repositories) {
+				for (const repo of repositoriesByPriority) {
 					const githubRepoId = repo.id;
 					const fullName = repo.full_name;
 					const stargazersCount = repo.stargazers_count;
@@ -1065,6 +1071,7 @@ const handleInstallationEvent = (
 							.first();
 
 						if (Option.isNone(existingJob)) {
+							const prioritySortKey = -(stargazersCount ?? 0);
 							yield* ctx.db.insert("github_sync_jobs", {
 								jobType: "backfill",
 								scopeType: "repository",
@@ -1080,6 +1087,7 @@ const handleInstallationEvent = (
 								currentStep: null,
 								completedSteps: [],
 								itemsFetched: 0,
+								prioritySortKey,
 								createdAt: now,
 								updatedAt: now,
 							});

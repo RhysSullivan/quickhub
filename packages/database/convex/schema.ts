@@ -40,6 +40,11 @@ const GitHubSyncJobSchema = Schema.Struct({
 	completedSteps: Schema.optional(Schema.Array(Schema.String)),
 	/** Running count of items fetched across all completed steps */
 	itemsFetched: Schema.optional(Schema.Number),
+	/**
+	 * Queue priority key where lower values are dequeued first.
+	 * Uses negative stargazer count so higher-star repos run earlier.
+	 */
+	prioritySortKey: Schema.optional(Schema.Number),
 	createdAt: Schema.Number,
 	updatedAt: Schema.Number,
 });
@@ -525,7 +530,13 @@ export const confectSchema = defineSchema({
 		.index("by_lockKey", ["lockKey"])
 		.index("by_state_and_nextRunAt", ["state", "nextRunAt"])
 		.index("by_scopeType_and_installationId", ["scopeType", "installationId"])
-		.index("by_installationId_and_state", ["installationId", "state"]),
+		.index("by_installationId_and_state", ["installationId", "state"])
+		.index("by_installationId_and_state_and_prioritySortKey_and_createdAt", [
+			"installationId",
+			"state",
+			"prioritySortKey",
+			"createdAt",
+		]),
 
 	github_sync_cursors: defineTable(GitHubSyncCursorSchema).index(
 		"by_cursorKey",

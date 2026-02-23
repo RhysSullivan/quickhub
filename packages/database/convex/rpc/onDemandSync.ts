@@ -526,6 +526,7 @@ const syncPullRequestDef = factory
 			ownerLogin: Schema.String,
 			name: Schema.String,
 			number: Schema.Number,
+			force: Schema.optional(Schema.Boolean),
 		},
 		success: Schema.Struct({
 			synced: Schema.Boolean,
@@ -573,7 +574,7 @@ syncPullRequestDef.implement((args) =>
 			},
 		);
 
-		if (repoCheck === true) {
+		if (repoCheck === true && args.force !== true) {
 			return { synced: false, repositoryId };
 		}
 

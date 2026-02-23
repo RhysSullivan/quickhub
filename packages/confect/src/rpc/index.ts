@@ -37,6 +37,7 @@ export {
 	createServerRpcQuery,
 	useSubscriptionWithInitial,
 	RpcDefectError,
+	type RpcReadOptions,
 	type RpcModuleClient,
 	type RpcModuleClientConfig,
 	type RpcQueryClient,

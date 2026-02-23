@@ -306,7 +306,7 @@ function IssueActionBar({
 }) {
 	const writeClient = useGithubWrite();
 	const [stateResult, doUpdateState] = useAtom(
-		writeClient.updateIssueState.mutate,
+		writeClient.updateIssueState.call,
 	);
 	const correlationPrefix = useId();
 	const isUpdatingState = Result.isWaiting(stateResult);
@@ -375,7 +375,7 @@ function CommentForm({
 }) {
 	const writeClient = useGithubWrite();
 	const [commentResult, submitComment] = useAtom(
-		writeClient.createComment.mutate,
+		writeClient.createComment.call,
 		{ mode: "promise" },
 	);
 	const [body, setBody] = useState("");

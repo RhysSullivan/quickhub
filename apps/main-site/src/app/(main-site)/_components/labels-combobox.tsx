@@ -51,7 +51,7 @@ export function LabelsCombobox({
 	const labelsResult = useAtomValue(labelsAtom);
 
 	const writeClient = useGithubWrite();
-	const [updateResult, updateLabels] = useAtom(writeClient.updateLabels.mutate);
+	const [updateResult, updateLabels] = useAtom(writeClient.updateLabels.call);
 	const correlationPrefix = useId();
 	const isUpdating = Result.isWaiting(updateResult);
 

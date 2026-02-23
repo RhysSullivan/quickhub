@@ -22,8 +22,6 @@ import { DatabaseRpcModuleMiddlewares } from "./moduleMiddlewares";
 import {
 	ReadGitHubRepoByNameMiddleware,
 	ReadGitHubRepoPermission,
-	RepoPushByNameMiddleware,
-	RepoTriageByIdMiddleware,
 } from "./security";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -189,109 +187,97 @@ class ActionsControlError extends Schema.TaggedError<ActionsControlError>()(
  * Re-run an entire workflow run.
  * POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun
  */
-const rerunWorkflowRunDef = factory
-	.action({
-		payload: {
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			githubRunId: Schema.Number,
-		},
-		success: Schema.Struct({ accepted: Schema.Boolean }),
-		error: Schema.Union(NotAuthenticated, ActionsControlError),
-	})
-	.middleware(RepoPushByNameMiddleware);
+const rerunWorkflowRunDef = factory.action({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		githubRunId: Schema.Number,
+	},
+	success: Schema.Struct({ accepted: Schema.Boolean }),
+	error: Schema.Union(NotAuthenticated, ActionsControlError),
+});
 
 /**
  * Re-run only failed jobs in a workflow run.
  * POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun-failed-jobs
  */
-const rerunFailedJobsDef = factory
-	.action({
-		payload: {
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			githubRunId: Schema.Number,
-		},
-		success: Schema.Struct({ accepted: Schema.Boolean }),
-		error: Schema.Union(NotAuthenticated, ActionsControlError),
-	})
-	.middleware(RepoPushByNameMiddleware);
+const rerunFailedJobsDef = factory.action({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		githubRunId: Schema.Number,
+	},
+	success: Schema.Struct({ accepted: Schema.Boolean }),
+	error: Schema.Union(NotAuthenticated, ActionsControlError),
+});
 
 /**
  * Cancel a workflow run.
  * POST /repos/{owner}/{repo}/actions/runs/{run_id}/cancel
  */
-const cancelWorkflowRunDef = factory
-	.action({
-		payload: {
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			githubRunId: Schema.Number,
-		},
-		success: Schema.Struct({ accepted: Schema.Boolean }),
-		error: Schema.Union(NotAuthenticated, ActionsControlError),
-	})
-	.middleware(RepoPushByNameMiddleware);
+const cancelWorkflowRunDef = factory.action({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		githubRunId: Schema.Number,
+	},
+	success: Schema.Struct({ accepted: Schema.Boolean }),
+	error: Schema.Union(NotAuthenticated, ActionsControlError),
+});
 
 /**
  * Trigger a workflow via workflow_dispatch.
  * POST /repos/{owner}/{repo}/actions/workflows/{workflow_id}/dispatches
  */
-const dispatchWorkflowDef = factory
-	.action({
-		payload: {
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			workflowId: Schema.Number,
-			ref: Schema.String,
-		},
-		success: Schema.Struct({ accepted: Schema.Boolean }),
-		error: Schema.Union(NotAuthenticated, ActionsControlError),
-	})
-	.middleware(RepoPushByNameMiddleware);
+const dispatchWorkflowDef = factory.action({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		workflowId: Schema.Number,
+		ref: Schema.String,
+	},
+	success: Schema.Struct({ accepted: Schema.Boolean }),
+	error: Schema.Union(NotAuthenticated, ActionsControlError),
+});
 
 const PullRequestCommentSideSchema = Schema.Literal("LEFT", "RIGHT");
 
-const createPrReviewCommentDef = factory
-	.action({
-		payload: {
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			prNumber: Schema.Number,
-			commitSha: Schema.optional(Schema.String),
-			body: Schema.String,
-			path: Schema.String,
-			line: Schema.Number,
-			side: PullRequestCommentSideSchema,
-			startLine: Schema.optional(Schema.Number),
-			startSide: Schema.optional(PullRequestCommentSideSchema),
-		},
-		success: Schema.Struct({
-			accepted: Schema.Boolean,
-			githubReviewCommentId: Schema.Number,
-		}),
-		error: Schema.Union(NotAuthenticated, ActionsControlError),
-	})
-	.middleware(RepoTriageByIdMiddleware);
+const createPrReviewCommentDef = factory.action({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		prNumber: Schema.Number,
+		commitSha: Schema.optional(Schema.String),
+		body: Schema.String,
+		path: Schema.String,
+		line: Schema.Number,
+		side: PullRequestCommentSideSchema,
+		startLine: Schema.optional(Schema.Number),
+		startSide: Schema.optional(PullRequestCommentSideSchema),
+	},
+	success: Schema.Struct({
+		accepted: Schema.Boolean,
+		githubReviewCommentId: Schema.Number,
+	}),
+	error: Schema.Union(NotAuthenticated, ActionsControlError),
+});
 
-const createPrReviewCommentReplyDef = factory
-	.action({
-		payload: {
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			prNumber: Schema.Number,
-			inReplyToGithubReviewCommentId: Schema.Number,
-			body: Schema.String,
-		},
-		success: Schema.Struct({
-			accepted: Schema.Boolean,
-			githubReviewCommentId: Schema.Number,
-		}),
-		error: Schema.Union(NotAuthenticated, ActionsControlError),
-	})
-	.middleware(RepoTriageByIdMiddleware);
+const createPrReviewCommentReplyDef = factory.action({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		prNumber: Schema.Number,
+		inReplyToGithubReviewCommentId: Schema.Number,
+		body: Schema.String,
+	},
+	success: Schema.Struct({
+		accepted: Schema.Boolean,
+		githubReviewCommentId: Schema.Number,
+	}),
+	error: Schema.Union(NotAuthenticated, ActionsControlError),
+});
 
 /**
  * Fetch the unified diff for a pull request from the GitHub API.

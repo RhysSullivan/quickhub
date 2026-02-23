@@ -294,6 +294,7 @@ reconcileRepoDef.implement((args) =>
 		}
 
 		const now = Date.now();
+		const prioritySortKey = -(repoDoc.stargazersCount ?? 0);
 
 		// Create a reconcile sync job
 		yield* ctx.db.insert("github_sync_jobs", {
@@ -308,6 +309,7 @@ reconcileRepoDef.implement((args) =>
 			attemptCount: 0,
 			nextRunAt: now,
 			lastError: null,
+			prioritySortKey,
 			createdAt: now,
 			updatedAt: now,
 		});

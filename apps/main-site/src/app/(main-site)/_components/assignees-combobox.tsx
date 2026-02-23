@@ -77,7 +77,7 @@ export function AssigneesCombobox({
 
 	const writeClient = useGithubWrite();
 	const [updateResult, updateAssignees] = useAtom(
-		writeClient.updateAssignees.mutate,
+		writeClient.updateAssignees.call,
 	);
 	const correlationPrefix = useId();
 	const isUpdating = Result.isWaiting(updateResult);

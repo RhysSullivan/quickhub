@@ -303,17 +303,21 @@ upsertPullRequestsDef.implement((args) =>
 				// Out-of-order protection: only update if newer
 				if (pr.githubUpdatedAt >= existing.value.githubUpdatedAt) {
 					yield* ctx.db.patch(existing.value._id, data);
-					// Sync aggregate: read back patched doc for new state
-					const updated = yield* ctx.db.get(existing.value._id);
-					if (Option.isSome(updated)) {
-						yield* syncPrReplace(rawCtx, existing.value, updated.value);
+					if (!args.skipProjections) {
+						// Sync aggregate: read back patched doc for new state
+						const updated = yield* ctx.db.get(existing.value._id);
+						if (Option.isSome(updated)) {
+							yield* syncPrReplace(rawCtx, existing.value, updated.value);
+						}
 					}
 				}
 			} else {
 				const id = yield* ctx.db.insert("github_pull_requests", data);
-				const inserted = yield* ctx.db.get(id);
-				if (Option.isSome(inserted)) {
-					yield* syncPrInsert(rawCtx, inserted.value);
+				if (!args.skipProjections) {
+					const inserted = yield* ctx.db.get(id);
+					if (Option.isSome(inserted)) {
+						yield* syncPrInsert(rawCtx, inserted.value);
+					}
 				}
 			}
 			upserted++;
@@ -358,16 +362,20 @@ upsertIssuesDef.implement((args) =>
 			if (Option.isSome(existing)) {
 				if (issue.githubUpdatedAt >= existing.value.githubUpdatedAt) {
 					yield* ctx.db.patch(existing.value._id, data);
-					const updated = yield* ctx.db.get(existing.value._id);
-					if (Option.isSome(updated)) {
-						yield* syncIssueReplace(rawCtx, existing.value, updated.value);
+					if (!args.skipProjections) {
+						const updated = yield* ctx.db.get(existing.value._id);
+						if (Option.isSome(updated)) {
+							yield* syncIssueReplace(rawCtx, existing.value, updated.value);
+						}
 					}
 				}
 			} else {
 				const id = yield* ctx.db.insert("github_issues", data);
-				const inserted = yield* ctx.db.get(id);
-				if (Option.isSome(inserted)) {
-					yield* syncIssueInsert(rawCtx, inserted.value);
+				if (!args.skipProjections) {
+					const inserted = yield* ctx.db.get(id);
+					if (Option.isSome(inserted)) {
+						yield* syncIssueInsert(rawCtx, inserted.value);
+					}
 				}
 			}
 			upserted++;

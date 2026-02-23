@@ -108,11 +108,21 @@ type PaginatedArgs<Extra> = keyof Extra extends never
 	? [numItems: number]
 	: [numItems: number, payload: Extra];
 
+export interface RpcReadOptions {
+	readonly enabled?: boolean;
+}
+
 export type RpcQueryClient<Payload, Success, Error> = {
-	query: (payload: Payload) => Atom.Atom<Result.Result<Success, Error | RpcDefectError>>;
+	query: (
+		payload: Payload,
+		options?: RpcReadOptions,
+	) => Atom.Atom<Result.Result<Success, Error | RpcDefectError>>;
 	queryEffect: (payload: Payload) => Effect.Effect<Success, Error | RpcDefectError>;
 	queryPromise: (payload: Payload) => Promise<Success>;
-	subscription: (payload: Payload) => Atom.Atom<Result.Result<Success, Error | RpcDefectError>>;
+	subscription: (
+		payload: Payload,
+		options?: RpcReadOptions,
+	) => Atom.Atom<Result.Result<Success, Error | RpcDefectError>>;
 } & (IsPaginatedResult<Success> extends true
 	? IsPaginatedPayload<Payload> extends true
 		? {
@@ -532,6 +542,12 @@ const createPaginatedAtom = (
 
 const noop = () => {};
 
+const isRpcReadEnabled = (options?: RpcReadOptions): boolean =>
+	options?.enabled ?? true;
+
+const makeDisabledResultAtom = <Success, Error>() =>
+	Atom.make(Result.initial<Success, Error>());
+
 export function createRpcClient<
 	TModule extends AnyRpcModule,
 	Shared extends Record<string, unknown> = {},
@@ -685,6 +701,11 @@ export function createRpcClient<
 
 			let endpointProxy = endpointProxyCache.get(prop);
 			if (!endpointProxy) {
+				const disabledResultAtom = makeDisabledResultAtom<
+					never,
+					RpcDefectError
+				>();
+
 				const queryEffect = (payload: unknown) => {
 					const convexFn = convexApi[prop] as FunctionReference<"query">;
 					const fullPayload = { ...getShared(), ...(payload as object) };
@@ -725,10 +746,16 @@ export function createRpcClient<
 				};
 
 				endpointProxy = {
-					query: (payload: unknown) => getQueryFamily(prop)(payload),
+					query: (payload: unknown, options?: RpcReadOptions) =>
+						isRpcReadEnabled(options)
+							? getQueryFamily(prop)(payload)
+							: disabledResultAtom,
 					queryEffect,
 					queryPromise: (payload: unknown) => Effect.runPromise(queryEffect(payload)),
-					subscription: (payload: unknown) => getSubscriptionFamily(prop)(payload),
+					subscription: (payload: unknown, options?: RpcReadOptions) =>
+						isRpcReadEnabled(options)
+							? getSubscriptionFamily(prop)(payload)
+							: disabledResultAtom,
 					mutate: getMutationFn(prop),
 					mutateEffect,
 					mutatePromise: (payload: unknown) => Effect.runPromise(mutateEffect(payload)),

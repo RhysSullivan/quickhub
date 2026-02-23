@@ -30,8 +30,6 @@ import { DatabaseRpcModuleMiddlewares } from "./moduleMiddlewares";
 import {
 	ReadGitHubRepoByIdMiddleware,
 	ReadGitHubRepoPermission,
-	RepoPushByIdMiddleware,
-	RepoTriageByIdMiddleware,
 } from "./security";
 
 const factory = createRpcFactory({ schema: confectSchema });
@@ -129,38 +127,6 @@ const toSyntheticIssueNumber = (correlationId: string): number => {
 	return hash;
 };
 
-const hasExistingCorrelationId = (
-	ctx: ConfectMutationCtx,
-	correlationId: string,
-) =>
-	Effect.gen(function* () {
-		const issue = yield* ctx.db
-			.query("github_issues")
-			.withIndex("by_optimisticCorrelationId", (q) =>
-				q.eq("optimisticCorrelationId", correlationId),
-			)
-			.first();
-		if (Option.isSome(issue)) return true;
-
-		const comment = yield* ctx.db
-			.query("github_issue_comments")
-			.withIndex("by_optimisticCorrelationId", (q) =>
-				q.eq("optimisticCorrelationId", correlationId),
-			)
-			.first();
-		if (Option.isSome(comment)) return true;
-
-		const pr = yield* ctx.db
-			.query("github_pull_requests")
-			.withIndex("by_optimisticCorrelationId", (q) =>
-				q.eq("optimisticCorrelationId", correlationId),
-			)
-			.first();
-		if (Option.isSome(pr)) return true;
-
-		return false;
-	});
-
 /**
  * Resolve the signed-in user's better-auth ID from the mutation context.
  * Every write operation must run as the signed-in user, not the repo connector.
@@ -178,834 +144,408 @@ const getActingUserId = (ctx: {
 		return identity.value.subject;
 	});
 
+const resolveWriteTokenAndClient = (
+	ctx: ConfectActionCtx,
+	actingUserId: string,
+) =>
+	Effect.gen(function* () {
+		const token = yield* lookupGitHubTokenByUserIdConfect(
+			(query, params) => ctx.runQuery(query, params),
+			(mutation, params) => ctx.runMutation(mutation, params),
+			actingUserId,
+		).pipe(
+			Effect.catchAll(
+				(error) =>
+					new NotAuthenticated({
+						reason: error.reason,
+					}),
+			),
+		);
+
+		const gh = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(token),
+		);
+
+		return { token, gh };
+	});
+
+const ensureWriteSucceeded = (result: {
+	success: boolean;
+	errorStatus: number | null;
+	errorMessage: string | null;
+}) =>
+	result.success
+		? Effect.void
+		: new GitHubWriteError({
+				status: result.errorStatus ?? 0,
+				message: result.errorMessage ?? "GitHub write failed",
+			});
+
+const executeWithAuthRefreshRetry = <
+	A extends {
+		success: boolean;
+		errorStatus: number | null;
+		errorMessage: string | null;
+	},
+>(
+	ctx: ConfectActionCtx,
+	actingUserId: string,
+	execute: (auth: {
+		token: string;
+		gh: { client: GitHubClient };
+	}) => Effect.Effect<A>,
+): Effect.Effect<A, NotAuthenticated> =>
+	Effect.gen(function* () {
+		const initialAuth = yield* resolveWriteTokenAndClient(ctx, actingUserId);
+		const initialResult = yield* execute(initialAuth);
+
+		if (initialResult.errorStatus !== 401) {
+			return initialResult;
+		}
+
+		const refreshedToken = yield* lookupGitHubTokenByUserIdConfect(
+			(query, params) => ctx.runQuery(query, params),
+			(mutation, params) => ctx.runMutation(mutation, params),
+			actingUserId,
+			{ forceRefresh: true },
+		).pipe(
+			Effect.catchAll(
+				(error) =>
+					new NotAuthenticated({
+						reason: error.reason,
+					}),
+			),
+		);
+
+		const refreshedGh = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(refreshedToken),
+		);
+
+		return yield* execute({ token: refreshedToken, gh: refreshedGh });
+	});
+
 // ---------------------------------------------------------------------------
-// 1. Public mutations — create pending write ops + schedule actions
+// 1. Public actions — execute writes immediately against GitHub
 // ---------------------------------------------------------------------------
 
-/**
- * Create a new issue (optimistic).
- * Inserts a pending write operation and schedules the GitHub API call.
- */
-const createIssueDef = factory
-	.mutation({
-		payload: {
-			correlationId: Schema.String,
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			title: Schema.String,
-			body: Schema.optional(Schema.String),
-			labels: Schema.optional(Schema.Array(Schema.String)),
-		},
-		success: Schema.Struct({ correlationId: Schema.String }),
-		error: Schema.Union(
-			DuplicateOperationError,
-			NotAuthenticated,
-			InsufficientPermission,
-		),
-	})
-	.middleware(RepoTriageByIdMiddleware);
+const createIssueDef = factory.action({
+	payload: {
+		correlationId: Schema.String,
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		title: Schema.String,
+		body: Schema.optional(Schema.String),
+		labels: Schema.optional(Schema.Array(Schema.String)),
+	},
+	success: Schema.Struct({ correlationId: Schema.String }),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+		GitHubWriteError,
+	),
+});
 
 createIssueDef.implement((args) =>
 	Effect.gen(function* () {
-		const ctx = yield* ConfectMutationCtx;
+		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const now = Date.now();
 
-		const hasDuplicate = yield* hasExistingCorrelationId(
+		const result = yield* executeWithAuthRefreshRetry(
 			ctx,
-			args.correlationId,
+			actingUserId,
+			({ gh }) =>
+				executeCreateIssue(gh, args.ownerLogin, args.name, {
+					title: args.title,
+					body: args.body ?? undefined,
+					labels: args.labels ?? [],
+				}),
 		);
-
-		if (hasDuplicate) {
-			return yield* new DuplicateOperationError({
-				correlationId: args.correlationId,
-			});
-		}
-
-		const optimisticData = {
-			title: args.title,
-			body: args.body ?? null,
-			labels: args.labels ?? [],
-		};
-		const labelNames: Array<string> = [...optimisticData.labels];
-
-		const syntheticIssueNumber = toSyntheticIssueNumber(args.correlationId);
-
-		yield* ctx.db.insert("github_issues", {
-			repositoryId: args.repositoryId,
-			githubIssueId: syntheticIssueNumber,
-			number: syntheticIssueNumber,
-			state: "open",
-			title: args.title,
-			body: args.body ?? null,
-			authorUserId: null,
-			assigneeUserIds: [],
-			labelNames,
-			commentCount: 0,
-			isPullRequest: false,
-			closedAt: null,
-			githubUpdatedAt: now,
-			cachedAt: now,
-			optimisticCorrelationId: args.correlationId,
-			optimisticOperationType: "create_issue",
-			optimisticState: "pending",
-			optimisticErrorMessage: null,
-			optimisticErrorStatus: null,
-			optimisticUpdatedAt: now,
-		});
-
-		yield* Effect.promise(() =>
-			ctx.scheduler.runAfter(
-				0,
-				internal.rpc.githubWrite.executeWriteOperation,
-				{ correlationId: args.correlationId, actingUserId },
-			),
-		);
+		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
 	}),
 );
 
-/**
- * Create a comment on an issue or PR (optimistic).
- */
-const createCommentDef = factory
-	.mutation({
-		payload: {
-			correlationId: Schema.String,
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			number: Schema.Number,
-			body: Schema.String,
-		},
-		success: Schema.Struct({ correlationId: Schema.String }),
-		error: Schema.Union(
-			DuplicateOperationError,
-			NotAuthenticated,
-			InsufficientPermission,
-		),
-	})
-	.middleware(RepoTriageByIdMiddleware);
+const createCommentDef = factory.action({
+	payload: {
+		correlationId: Schema.String,
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		number: Schema.Number,
+		body: Schema.String,
+	},
+	success: Schema.Struct({ correlationId: Schema.String }),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+		GitHubWriteError,
+	),
+});
 
 createCommentDef.implement((args) =>
 	Effect.gen(function* () {
-		const ctx = yield* ConfectMutationCtx;
+		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const now = Date.now();
 
-		const hasDuplicate = yield* hasExistingCorrelationId(
+		const result = yield* executeWithAuthRefreshRetry(
 			ctx,
-			args.correlationId,
+			actingUserId,
+			({ gh }) =>
+				executeCreateComment(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					body: args.body,
+				}),
 		);
-
-		if (hasDuplicate) {
-			return yield* new DuplicateOperationError({
-				correlationId: args.correlationId,
-			});
-		}
-
-		const syntheticCommentId = toSyntheticIssueNumber(args.correlationId);
-
-		yield* ctx.db.insert("github_issue_comments", {
-			repositoryId: args.repositoryId,
-			issueNumber: args.number,
-			githubCommentId: syntheticCommentId,
-			authorUserId: null,
-			body: args.body,
-			createdAt: now,
-			updatedAt: now,
-			optimisticCorrelationId: args.correlationId,
-			optimisticOperationType: "create_comment",
-			optimisticState: "pending",
-			optimisticErrorMessage: null,
-			optimisticErrorStatus: null,
-			optimisticUpdatedAt: now,
-		});
-
-		yield* Effect.promise(() =>
-			ctx.scheduler.runAfter(
-				0,
-				internal.rpc.githubWrite.executeWriteOperation,
-				{ correlationId: args.correlationId, actingUserId },
-			),
-		);
+		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
 	}),
 );
 
-/**
- * Update issue/PR state (optimistic).
- */
-const updateIssueStateDef = factory
-	.mutation({
-		payload: {
-			correlationId: Schema.String,
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			number: Schema.Number,
-			state: Schema.Literal("open", "closed"),
-		},
-		success: Schema.Struct({ correlationId: Schema.String }),
-		error: Schema.Union(
-			DuplicateOperationError,
-			NotAuthenticated,
-			InsufficientPermission,
-		),
-	})
-	.middleware(RepoTriageByIdMiddleware);
+const updateIssueStateDef = factory.action({
+	payload: {
+		correlationId: Schema.String,
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		number: Schema.Number,
+		state: Schema.Literal("open", "closed"),
+	},
+	success: Schema.Struct({ correlationId: Schema.String }),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+		GitHubWriteError,
+	),
+});
 
 updateIssueStateDef.implement((args) =>
 	Effect.gen(function* () {
-		const ctx = yield* ConfectMutationCtx;
+		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const now = Date.now();
 
-		const hasDuplicate = yield* hasExistingCorrelationId(
+		const result = yield* executeWithAuthRefreshRetry(
 			ctx,
-			args.correlationId,
+			actingUserId,
+			({ gh }) =>
+				executeUpdateIssueState(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					state: args.state,
+				}),
 		);
-
-		if (hasDuplicate) {
-			return yield* new DuplicateOperationError({
-				correlationId: args.correlationId,
-			});
-		}
-
-		const issue = yield* ctx.db
-			.query("github_issues")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", args.repositoryId).eq("number", args.number),
-			)
-			.first();
-		const pr = yield* ctx.db
-			.query("github_pull_requests")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", args.repositoryId).eq("number", args.number),
-			)
-			.first();
-
-		if (Option.isSome(pr)) {
-			yield* ctx.db.patch(pr.value._id, {
-				state: args.state,
-				closedAt: args.state === "closed" ? now : null,
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_issue_state",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify({ state: args.state }),
-			});
-		} else if (Option.isSome(issue)) {
-			yield* ctx.db.patch(issue.value._id, {
-				state: args.state,
-				closedAt: args.state === "closed" ? now : null,
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_issue_state",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-			});
-		} else {
-			yield* ctx.db.insert("github_issues", {
-				repositoryId: args.repositoryId,
-				githubIssueId: toSyntheticIssueNumber(args.correlationId),
-				number: args.number,
-				state: args.state,
-				title: `Issue #${String(args.number)}`,
-				body: null,
-				authorUserId: null,
-				assigneeUserIds: [],
-				labelNames: [],
-				commentCount: 0,
-				isPullRequest: false,
-				closedAt: args.state === "closed" ? now : null,
-				githubUpdatedAt: now,
-				cachedAt: now,
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_issue_state",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-			});
-		}
-
-		yield* Effect.promise(() =>
-			ctx.scheduler.runAfter(
-				0,
-				internal.rpc.githubWrite.executeWriteOperation,
-				{ correlationId: args.correlationId, actingUserId },
-			),
-		);
+		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
 	}),
 );
 
-/**
- * Merge a pull request (optimistic).
- */
-const mergePullRequestDef = factory
-	.mutation({
-		payload: {
-			correlationId: Schema.String,
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			number: Schema.Number,
-			mergeMethod: Schema.optional(Schema.Literal("merge", "squash", "rebase")),
-			commitTitle: Schema.optional(Schema.String),
-			commitMessage: Schema.optional(Schema.String),
-		},
-		success: Schema.Struct({ correlationId: Schema.String }),
-		error: Schema.Union(
-			DuplicateOperationError,
-			NotAuthenticated,
-			InsufficientPermission,
-		),
-	})
-	.middleware(RepoPushByIdMiddleware);
+const mergePullRequestDef = factory.action({
+	payload: {
+		correlationId: Schema.String,
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		number: Schema.Number,
+		mergeMethod: Schema.optional(Schema.Literal("merge", "squash", "rebase")),
+		commitTitle: Schema.optional(Schema.String),
+		commitMessage: Schema.optional(Schema.String),
+	},
+	success: Schema.Struct({ correlationId: Schema.String }),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+		GitHubWriteError,
+	),
+});
 
 mergePullRequestDef.implement((args) =>
 	Effect.gen(function* () {
-		const ctx = yield* ConfectMutationCtx;
+		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const now = Date.now();
 
-		const hasDuplicate = yield* hasExistingCorrelationId(
+		const result = yield* executeWithAuthRefreshRetry(
 			ctx,
-			args.correlationId,
+			actingUserId,
+			({ gh }) =>
+				executeMergePullRequest(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					mergeMethod: args.mergeMethod ?? undefined,
+					commitTitle: args.commitTitle ?? undefined,
+					commitMessage: args.commitMessage ?? undefined,
+				}),
 		);
-
-		if (hasDuplicate) {
-			return yield* new DuplicateOperationError({
-				correlationId: args.correlationId,
-			});
-		}
-
-		const pr = yield* ctx.db
-			.query("github_pull_requests")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", args.repositoryId).eq("number", args.number),
-			)
-			.first();
-		const optimisticPayload = {
-			mergeMethod: args.mergeMethod ?? null,
-			commitTitle: args.commitTitle ?? null,
-			commitMessage: args.commitMessage ?? null,
-		};
-
-		if (Option.isSome(pr)) {
-			yield* ctx.db.patch(pr.value._id, {
-				state: "closed",
-				closedAt: now,
-				mergedAt: now,
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "merge_pull_request",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify(optimisticPayload),
-			});
-		} else {
-			yield* ctx.db.insert("github_pull_requests", {
-				repositoryId: args.repositoryId,
-				githubPrId: toSyntheticIssueNumber(args.correlationId),
-				number: args.number,
-				state: "closed",
-				draft: false,
-				title: `Pull request #${String(args.number)}`,
-				body: null,
-				authorUserId: null,
-				assigneeUserIds: [],
-				requestedReviewerUserIds: [],
-				labelNames: [],
-				baseRefName: "main",
-				headRefName: "unknown",
-				headSha: args.correlationId,
-				mergeableState: null,
-				mergedAt: now,
-				closedAt: now,
-				githubUpdatedAt: now,
-				cachedAt: now,
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "merge_pull_request",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify(optimisticPayload),
-			});
-		}
-
-		yield* Effect.promise(() =>
-			ctx.scheduler.runAfter(
-				0,
-				internal.rpc.githubWrite.executeWriteOperation,
-				{ correlationId: args.correlationId, actingUserId },
-			),
-		);
+		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
 	}),
 );
 
-/**
- * Update pull request branch (optimistic).
- */
-const updatePullRequestBranchDef = factory
-	.mutation({
-		payload: {
-			correlationId: Schema.String,
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			number: Schema.Number,
-			expectedHeadSha: Schema.optional(Schema.String),
-		},
-		success: Schema.Struct({ correlationId: Schema.String }),
-		error: Schema.Union(
-			DuplicateOperationError,
-			NotAuthenticated,
-			InsufficientPermission,
-		),
-	})
-	.middleware(RepoPushByIdMiddleware);
+const updatePullRequestBranchDef = factory.action({
+	payload: {
+		correlationId: Schema.String,
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		number: Schema.Number,
+		expectedHeadSha: Schema.optional(Schema.String),
+	},
+	success: Schema.Struct({ correlationId: Schema.String }),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+		GitHubWriteError,
+	),
+});
 
 updatePullRequestBranchDef.implement((args) =>
 	Effect.gen(function* () {
-		const ctx = yield* ConfectMutationCtx;
+		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const now = Date.now();
 
-		const hasDuplicate = yield* hasExistingCorrelationId(
+		const result = yield* executeWithAuthRefreshRetry(
 			ctx,
-			args.correlationId,
+			actingUserId,
+			({ token }) =>
+				executeUpdatePullRequestBranch(
+					args.ownerLogin,
+					args.name,
+					{
+						number: args.number,
+						expectedHeadSha: args.expectedHeadSha ?? undefined,
+					},
+					token,
+				),
 		);
-
-		if (hasDuplicate) {
-			return yield* new DuplicateOperationError({
-				correlationId: args.correlationId,
-			});
-		}
-
-		const pr = yield* ctx.db
-			.query("github_pull_requests")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", args.repositoryId).eq("number", args.number),
-			)
-			.first();
-		const optimisticPayload = {
-			expectedHeadSha: args.expectedHeadSha ?? null,
-		};
-
-		if (Option.isSome(pr)) {
-			yield* ctx.db.patch(pr.value._id, {
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_pull_request_branch",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify(optimisticPayload),
-			});
-		} else {
-			yield* ctx.db.insert("github_pull_requests", {
-				repositoryId: args.repositoryId,
-				githubPrId: toSyntheticIssueNumber(args.correlationId),
-				number: args.number,
-				state: "open",
-				draft: false,
-				title: `Pull request #${String(args.number)}`,
-				body: null,
-				authorUserId: null,
-				assigneeUserIds: [],
-				requestedReviewerUserIds: [],
-				labelNames: [],
-				baseRefName: "main",
-				headRefName: "unknown",
-				headSha: args.expectedHeadSha ?? args.correlationId,
-				mergeableState: null,
-				mergedAt: null,
-				closedAt: null,
-				githubUpdatedAt: now,
-				cachedAt: now,
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_pull_request_branch",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify(optimisticPayload),
-			});
-		}
-
-		yield* Effect.promise(() =>
-			ctx.scheduler.runAfter(
-				0,
-				internal.rpc.githubWrite.executeWriteOperation,
-				{ correlationId: args.correlationId, actingUserId },
-			),
-		);
+		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
 	}),
 );
 
-const submitPrReviewDef = factory
-	.mutation({
-		payload: {
-			correlationId: Schema.String,
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			number: Schema.Number,
-			event: Schema.Literal("APPROVE", "REQUEST_CHANGES", "COMMENT"),
-			body: Schema.optional(Schema.String),
-		},
-		success: Schema.Struct({ correlationId: Schema.String }),
-		error: Schema.Union(
-			DuplicateOperationError,
-			NotAuthenticated,
-			InsufficientPermission,
-		),
-	})
-	.middleware(RepoTriageByIdMiddleware);
+const submitPrReviewDef = factory.action({
+	payload: {
+		correlationId: Schema.String,
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		number: Schema.Number,
+		event: Schema.Literal("APPROVE", "REQUEST_CHANGES", "COMMENT"),
+		body: Schema.optional(Schema.String),
+	},
+	success: Schema.Struct({ correlationId: Schema.String }),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+		GitHubWriteError,
+	),
+});
 
 submitPrReviewDef.implement((args) =>
 	Effect.gen(function* () {
-		const ctx = yield* ConfectMutationCtx;
+		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
 
-		const hasDuplicate = yield* hasExistingCorrelationId(
+		const result = yield* executeWithAuthRefreshRetry(
 			ctx,
-			args.correlationId,
+			actingUserId,
+			({ gh }) =>
+				executeSubmitPrReview(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					event: args.event,
+					body: args.body ?? undefined,
+				}),
 		);
-		if (hasDuplicate) {
-			return yield* new DuplicateOperationError({
-				correlationId: args.correlationId,
-			});
-		}
-
-		const now = Date.now();
-		const optimisticReviewId = toSyntheticIssueNumber(args.correlationId);
-		const reviewState =
-			args.event === "APPROVE"
-				? "APPROVED"
-				: args.event === "REQUEST_CHANGES"
-					? "CHANGES_REQUESTED"
-					: "COMMENTED";
-
-		yield* ctx.db.insert("github_pull_request_reviews", {
-			repositoryId: args.repositoryId,
-			pullRequestNumber: args.number,
-			githubReviewId: optimisticReviewId,
-			authorUserId: null,
-			state: reviewState,
-			submittedAt: now,
-			commitSha: null,
-			optimisticCorrelationId: args.correlationId,
-			optimisticOperationType: "submit_pr_review",
-			optimisticState: "pending",
-			optimisticErrorMessage: null,
-			optimisticErrorStatus: null,
-			optimisticUpdatedAt: now,
-			optimisticPayloadJson: JSON.stringify({
-				event: args.event,
-				body: args.body ?? null,
-			}),
-		});
-
-		yield* Effect.promise(() =>
-			ctx.scheduler.runAfter(
-				0,
-				internal.rpc.githubWrite.executeWriteOperation,
-				{ correlationId: args.correlationId, actingUserId },
-			),
-		);
+		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
 	}),
 );
 
-const updateLabelsDef = factory
-	.mutation({
-		payload: {
-			correlationId: Schema.String,
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			number: Schema.Number,
-			labelsToAdd: Schema.Array(Schema.String),
-			labelsToRemove: Schema.Array(Schema.String),
-		},
-		success: Schema.Struct({ correlationId: Schema.String }),
-		error: Schema.Union(
-			DuplicateOperationError,
-			NotAuthenticated,
-			InsufficientPermission,
-		),
-	})
-	.middleware(RepoTriageByIdMiddleware);
+const updateLabelsDef = factory.action({
+	payload: {
+		correlationId: Schema.String,
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		number: Schema.Number,
+		labelsToAdd: Schema.Array(Schema.String),
+		labelsToRemove: Schema.Array(Schema.String),
+	},
+	success: Schema.Struct({ correlationId: Schema.String }),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+		GitHubWriteError,
+	),
+});
 
 updateLabelsDef.implement((args) =>
 	Effect.gen(function* () {
-		const ctx = yield* ConfectMutationCtx;
+		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
 
-		const hasDuplicate = yield* hasExistingCorrelationId(
+		const result = yield* executeWithAuthRefreshRetry(
 			ctx,
-			args.correlationId,
+			actingUserId,
+			({ gh }) =>
+				executeUpdateLabels(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					labelsToAdd: args.labelsToAdd,
+					labelsToRemove: args.labelsToRemove,
+				}),
 		);
-		if (hasDuplicate) {
-			return yield* new DuplicateOperationError({
-				correlationId: args.correlationId,
-			});
-		}
-
-		const now = Date.now();
-		const issue = yield* ctx.db
-			.query("github_issues")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", args.repositoryId).eq("number", args.number),
-			)
-			.first();
-		const pr = yield* ctx.db
-			.query("github_pull_requests")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", args.repositoryId).eq("number", args.number),
-			)
-			.first();
-
-		const applyLabels = (current: ReadonlyArray<string>) => {
-			const withoutRemoved = current.filter(
-				(label) => !args.labelsToRemove.includes(label),
-			);
-			const merged = [...withoutRemoved, ...args.labelsToAdd];
-			return [...new Set(merged)];
-		};
-
-		if (Option.isSome(issue)) {
-			yield* ctx.db.patch(issue.value._id, {
-				labelNames: applyLabels(issue.value.labelNames),
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_labels",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify({
-					labelsToAdd: args.labelsToAdd,
-					labelsToRemove: args.labelsToRemove,
-				}),
-			});
-		}
-
-		if (Option.isSome(pr)) {
-			const currentLabels = pr.value.labelNames ?? [];
-			yield* ctx.db.patch(pr.value._id, {
-				labelNames: applyLabels(currentLabels),
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_labels",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify({
-					labelsToAdd: args.labelsToAdd,
-					labelsToRemove: args.labelsToRemove,
-				}),
-			});
-		}
-
-		if (Option.isNone(issue) && Option.isNone(pr)) {
-			yield* ctx.db.insert("github_issues", {
-				repositoryId: args.repositoryId,
-				githubIssueId: toSyntheticIssueNumber(args.correlationId),
-				number: args.number,
-				state: "open",
-				title: `Issue #${String(args.number)}`,
-				body: null,
-				authorUserId: null,
-				assigneeUserIds: [],
-				labelNames: [...new Set(args.labelsToAdd)],
-				commentCount: 0,
-				isPullRequest: false,
-				closedAt: null,
-				githubUpdatedAt: now,
-				cachedAt: now,
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_labels",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify({
-					labelsToAdd: args.labelsToAdd,
-					labelsToRemove: args.labelsToRemove,
-				}),
-			});
-		}
-
-		yield* Effect.promise(() =>
-			ctx.scheduler.runAfter(
-				0,
-				internal.rpc.githubWrite.executeWriteOperation,
-				{ correlationId: args.correlationId, actingUserId },
-			),
-		);
+		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
 	}),
 );
 
-const updateAssigneesDef = factory
-	.mutation({
-		payload: {
-			correlationId: Schema.String,
-			ownerLogin: Schema.String,
-			name: Schema.String,
-			repositoryId: Schema.Number,
-			number: Schema.Number,
-			assigneesToAdd: Schema.Array(Schema.String),
-			assigneesToRemove: Schema.Array(Schema.String),
-		},
-		success: Schema.Struct({ correlationId: Schema.String }),
-		error: Schema.Union(
-			DuplicateOperationError,
-			NotAuthenticated,
-			InsufficientPermission,
-		),
-	})
-	.middleware(RepoTriageByIdMiddleware);
+const updateAssigneesDef = factory.action({
+	payload: {
+		correlationId: Schema.String,
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.Number,
+		number: Schema.Number,
+		assigneesToAdd: Schema.Array(Schema.String),
+		assigneesToRemove: Schema.Array(Schema.String),
+	},
+	success: Schema.Struct({ correlationId: Schema.String }),
+	error: Schema.Union(
+		DuplicateOperationError,
+		NotAuthenticated,
+		InsufficientPermission,
+		GitHubWriteError,
+	),
+});
 
 updateAssigneesDef.implement((args) =>
 	Effect.gen(function* () {
-		const ctx = yield* ConfectMutationCtx;
+		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
 
-		const hasDuplicate = yield* hasExistingCorrelationId(
+		const result = yield* executeWithAuthRefreshRetry(
 			ctx,
-			args.correlationId,
+			actingUserId,
+			({ gh }) =>
+				executeUpdateAssignees(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					assigneesToAdd: args.assigneesToAdd,
+					assigneesToRemove: args.assigneesToRemove,
+				}),
 		);
-		if (hasDuplicate) {
-			return yield* new DuplicateOperationError({
-				correlationId: args.correlationId,
-			});
-		}
-
-		const now = Date.now();
-		const issue = yield* ctx.db
-			.query("github_issues")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", args.repositoryId).eq("number", args.number),
-			)
-			.first();
-		const pr = yield* ctx.db
-			.query("github_pull_requests")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", args.repositoryId).eq("number", args.number),
-			)
-			.first();
-
-		const resolveUserIds = (logins: ReadonlyArray<string>) =>
-			Effect.forEach(logins, (login) =>
-				ctx.db
-					.query("github_users")
-					.withIndex("by_login", (q) => q.eq("login", login))
-					.first()
-					.pipe(
-						Effect.map((user) =>
-							Option.isSome(user) ? user.value.githubUserId : null,
-						),
-					),
-			);
-
-		const addIdsRaw = yield* resolveUserIds(args.assigneesToAdd);
-		const removeIdsRaw = yield* resolveUserIds(args.assigneesToRemove);
-		const addIds = addIdsRaw.filter((id) => id !== null);
-		const removeIds = new Set(removeIdsRaw.filter((id) => id !== null));
-
-		const applyAssignees = (current: ReadonlyArray<number>) => {
-			const kept = current.filter((id) => !removeIds.has(id));
-			return [...new Set([...kept, ...addIds])];
-		};
-
-		if (Option.isSome(issue)) {
-			yield* ctx.db.patch(issue.value._id, {
-				assigneeUserIds: applyAssignees(issue.value.assigneeUserIds),
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_assignees",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify({
-					assigneesToAdd: args.assigneesToAdd,
-					assigneesToRemove: args.assigneesToRemove,
-				}),
-			});
-		}
-
-		if (Option.isSome(pr)) {
-			yield* ctx.db.patch(pr.value._id, {
-				assigneeUserIds: applyAssignees(pr.value.assigneeUserIds),
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_assignees",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify({
-					assigneesToAdd: args.assigneesToAdd,
-					assigneesToRemove: args.assigneesToRemove,
-				}),
-			});
-		}
-
-		if (Option.isNone(issue) && Option.isNone(pr)) {
-			yield* ctx.db.insert("github_issues", {
-				repositoryId: args.repositoryId,
-				githubIssueId: toSyntheticIssueNumber(args.correlationId),
-				number: args.number,
-				state: "open",
-				title: `Issue #${String(args.number)}`,
-				body: null,
-				authorUserId: null,
-				assigneeUserIds: [...new Set(addIds)],
-				labelNames: [],
-				commentCount: 0,
-				isPullRequest: false,
-				closedAt: null,
-				githubUpdatedAt: now,
-				cachedAt: now,
-				optimisticCorrelationId: args.correlationId,
-				optimisticOperationType: "update_assignees",
-				optimisticState: "pending",
-				optimisticErrorMessage: null,
-				optimisticErrorStatus: null,
-				optimisticUpdatedAt: now,
-				optimisticPayloadJson: JSON.stringify({
-					assigneesToAdd: args.assigneesToAdd,
-					assigneesToRemove: args.assigneesToRemove,
-				}),
-			});
-		}
-
-		yield* Effect.promise(() =>
-			ctx.scheduler.runAfter(
-				0,
-				internal.rpc.githubWrite.executeWriteOperation,
-				{ correlationId: args.correlationId, actingUserId },
-			),
-		);
+		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
 	}),

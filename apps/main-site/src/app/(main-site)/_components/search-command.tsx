@@ -13,6 +13,7 @@ import {
 	CommandSeparator,
 	CommandShortcut,
 } from "@packages/ui/components/command";
+import { useConvexAuthState } from "@packages/ui/components/convex-client-provider";
 import {
 	CircleDot,
 	Clock3,
@@ -673,10 +674,17 @@ function GlobalWorkResults({
 	query: string;
 	onSelect: (target: NavigationTarget) => void;
 }) {
+	const { isReadyForQueries } = useConvexAuthState();
 	const client = useProjectionQueries();
 	const dashboardAtom = useMemo(
-		() => client.getHomeDashboard.subscription({}),
-		[client],
+		() =>
+			client.getHomeDashboard.subscription(
+				{},
+				{
+					enabled: isReadyForQueries,
+				},
+			),
+		[client, isReadyForQueries],
 	);
 	const result = useAtomValue(dashboardAtom);
 
@@ -774,8 +782,18 @@ function RepoResults({
 	heading?: string;
 	limit?: number;
 }) {
+	const { isReadyForQueries } = useConvexAuthState();
 	const client = useProjectionQueries();
-	const reposAtom = useMemo(() => client.listRepos.subscription({}), [client]);
+	const reposAtom = useMemo(
+		() =>
+			client.listRepos.subscription(
+				{},
+				{
+					enabled: isReadyForQueries,
+				},
+			),
+		[client, isReadyForQueries],
+	);
 	const result = useAtomValue(reposAtom);
 
 	if (Result.isInitial(result)) {

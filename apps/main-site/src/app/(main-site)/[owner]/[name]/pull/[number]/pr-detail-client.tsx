@@ -42,6 +42,7 @@ import { cn } from "@packages/ui/lib/utils";
 import { useCodeBrowse } from "@packages/ui/rpc/code-browse";
 import { useGithubActions } from "@packages/ui/rpc/github-actions";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
+import { useOnDemandSync } from "@packages/ui/rpc/on-demand-sync";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import type { FileDiffOptions } from "@pierre/diffs";
 import {
@@ -69,6 +70,7 @@ import { PrDetailSkeleton } from "@/app/(main-site)/_components/skeletons";
 import { MarkdownBody } from "@/components/markdown-body";
 import {
 	extractErrorMessage,
+	extractErrorReason,
 	extractErrorTag,
 	extractRpcDefectMessage,
 } from "@/lib/rpc-error";
@@ -96,12 +98,19 @@ function extractInteractionError(
 	const message = extractErrorMessage(err);
 	if (message !== null) return message;
 
+	const reason = extractErrorReason(err);
+	if (reason !== null) return reason;
+
 	if (extractErrorTag(err) === "RpcDefectError") {
 		const defectMessage = extractRpcDefectMessage(err);
 		if (defectMessage !== null) return defectMessage;
 	}
 
 	return fallback;
+}
+
+function normalizeReviewState(state: string): string {
+	return state.trim().replaceAll(" ", "_").toUpperCase();
 }
 
 type PrDetail = {
@@ -2478,23 +2487,6 @@ function InfoSidebar({
 	onUpdateDraftReplyBody: (draftReplyId: string, nextBody: string) => void;
 	onClearDraftReplies: () => void;
 }) {
-	const approvedCount = pr.reviews.filter(
-		(review) => review.state === "APPROVED",
-	).length;
-	const changesRequestedCount = pr.reviews.filter(
-		(review) => review.state === "CHANGES_REQUESTED",
-	).length;
-
-	const failingChecksCount = pr.checkRuns.filter(
-		(check) => check.conclusion === "failure",
-	).length;
-	const pendingChecksCount = pr.checkRuns.filter(
-		(check) => check.status === "queued" || check.status === "in_progress",
-	).length;
-	const passingChecksCount = pr.checkRuns.filter(
-		(check) => check.conclusion === "success",
-	).length;
-
 	const [checkFilter, setCheckFilter] = useState<
 		"all" | "failing" | "pending" | "passing"
 	>("all");
@@ -2583,64 +2575,30 @@ function InfoSidebar({
 					</Badge>
 				</div>
 
-				{/* Inline status counters */}
-				{(approvedCount > 0 ||
-					changesRequestedCount > 0 ||
-					failingChecksCount > 0 ||
-					pendingChecksCount > 0) && (
-					<div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-xs">
-						{approvedCount > 0 && (
-							<span className="inline-flex items-center gap-1 text-github-open">
-								<svg
-									className="size-3.5"
-									viewBox="0 0 16 16"
-									fill="currentColor"
-								>
-									<path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
-								</svg>
-								{approvedCount} approved
-							</span>
-						)}
-						{changesRequestedCount > 0 && (
-							<span className="inline-flex items-center gap-1 text-destructive">
-								<svg
-									className="size-3.5"
-									viewBox="0 0 16 16"
-									fill="currentColor"
-								>
-									<path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.75.75 0 1 1 1.06 1.06L9.06 8l3.22 3.22a.75.75 0 1 1-1.06 1.06L8 9.06l-3.22 3.22a.75.75 0 0 1-1.06-1.06L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z" />
-								</svg>
-								{changesRequestedCount} changes
-							</span>
-						)}
-						{failingChecksCount > 0 && (
-							<span className="inline-flex items-center gap-1 text-destructive">
-								<div className="size-2 rounded-full bg-current" />
-								{failingChecksCount} failing
-							</span>
-						)}
-						{pendingChecksCount > 0 && (
-							<span className="inline-flex items-center gap-1 text-muted-foreground">
-								<div className="size-2 rounded-full border border-current" />
-								{pendingChecksCount} pending
-							</span>
-						)}
-						{passingChecksCount > 0 &&
-							failingChecksCount === 0 &&
-							pendingChecksCount === 0 && (
-								<span className="inline-flex items-center gap-1 text-github-open">
-									<svg
-										className="size-3.5"
-										viewBox="0 0 16 16"
-										fill="currentColor"
-									>
-										<path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.75.75 0 0 1 1.06-1.06L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z" />
-									</svg>
-									All checks pass
-								</span>
-							)}
+				{visibleReviews.length > 0 && (
+					<div className="mt-3 space-y-1.5">
+						<SidebarHeading>Reviews</SidebarHeading>
+						<div className="flex flex-wrap gap-1.5">
+							{visibleReviews.map((review) => (
+								<ReviewerChip key={review.githubReviewId} review={review} />
+							))}
+						</div>
 					</div>
 				)}
+
+				<div className="mt-3">
+					<PrActionBar
+						ownerLogin={owner}
+						name={name}
+						number={prNumber}
+						repositoryId={pr.repositoryId}
+						state={pr.state}
+						draft={pr.draft}
+						mergedAt={pr.mergedAt}
+						mergeableState={pr.mergeableState}
+						headSha={pr.headSha}
+					/>
+				</div>
 			</SidebarSection>
 
 			{/* ── Description ── */}
@@ -2813,24 +2771,6 @@ function InfoSidebar({
 						</SidebarSection>
 					)}
 
-					{/* Reviews — compact per-reviewer chips */}
-					{pr.reviews.length > 0 && (
-						<SidebarSection>
-							<SidebarHeading>Reviews</SidebarHeading>
-							{visibleReviews.length > 0 ? (
-								<div className="flex flex-wrap gap-1.5">
-									{visibleReviews.map((review) => (
-										<ReviewerChip key={review.githubReviewId} review={review} />
-									))}
-								</div>
-							) : (
-								<p className="text-xs text-muted-foreground/60 py-1">
-									No reviews match.
-								</p>
-							)}
-						</SidebarSection>
-					)}
-
 					{/* Comments */}
 					{pr.comments.length > 0 && (
 						<SidebarSection>
@@ -2879,21 +2819,6 @@ function InfoSidebar({
 					)}
 				</>
 			)}
-
-			{/* ── Close / Reopen + Merge ── */}
-			<SidebarSection>
-				<PrActionBar
-					ownerLogin={owner}
-					name={name}
-					number={prNumber}
-					repositoryId={pr.repositoryId}
-					state={pr.state}
-					draft={pr.draft}
-					mergedAt={pr.mergedAt}
-					mergeableState={pr.mergeableState}
-					headSha={pr.headSha}
-				/>
-			</SidebarSection>
 		</div>
 	);
 }
@@ -2970,60 +2895,138 @@ function PrActionBar({
 	headSha: string;
 }) {
 	const writeClient = useGithubWrite();
-	const [mergeResult, doMerge] = useAtom(writeClient.mergePullRequest.mutate);
+	const onDemandSync = useOnDemandSync();
+	const [mergeResult, doMerge] = useAtom(writeClient.mergePullRequest.call);
+	const [syncPullRequestResult, syncPullRequest] = useAtom(
+		onDemandSync.syncPullRequest.call,
+	);
 	const [branchUpdateResult, doUpdateBranch] = useAtom(
-		writeClient.updatePullRequestBranch.mutate,
+		writeClient.updatePullRequestBranch.call,
 	);
 	const [stateResult, doUpdateState] = useAtom(
-		writeClient.updateIssueState.mutate,
+		writeClient.updateIssueState.call,
 	);
 	const correlationPrefix = useId();
+	const hasRequestedMergeabilityRefresh = useRef(false);
 	const isMerging = Result.isWaiting(mergeResult);
+	const isSyncingPullRequest = Result.isWaiting(syncPullRequestResult);
 	const isUpdatingBranch = Result.isWaiting(branchUpdateResult);
 	const isUpdatingState = Result.isWaiting(stateResult);
 
-	if (mergedAt !== null) return null;
+	const normalizedMergeableState = mergeableState?.trim().toLowerCase() ?? null;
 	const isMergeable =
 		state === "open" &&
 		!draft &&
-		(mergeableState === "clean" || mergeableState === "unstable");
-	const canUpdateBranch = state === "open" && mergeableState === "behind";
+		(normalizedMergeableState === "clean" ||
+			normalizedMergeableState === "unstable");
+	const canUpdateBranch =
+		state === "open" && normalizedMergeableState === "behind";
+
+	useEffect(() => {
+		if (state !== "open" || draft || normalizedMergeableState !== null) {
+			hasRequestedMergeabilityRefresh.current = false;
+			return;
+		}
+		if (hasRequestedMergeabilityRefresh.current) return;
+		hasRequestedMergeabilityRefresh.current = true;
+		syncPullRequest({
+			ownerLogin,
+			name,
+			number,
+			force: true,
+		});
+	}, [
+		draft,
+		name,
+		normalizedMergeableState,
+		number,
+		ownerLogin,
+		state,
+		syncPullRequest,
+	]);
+
+	if (mergedAt !== null) return null;
+
+	const mergeDisabledReason = isMerging
+		? "Merge in progress"
+		: state !== "open"
+			? "Only open pull requests can be merged"
+			: draft
+				? "Draft pull requests cannot be merged"
+				: normalizedMergeableState === null
+					? isSyncingPullRequest
+						? "Refreshing mergeability from GitHub"
+						: "Mergeability is still being calculated"
+					: normalizedMergeableState === "behind"
+						? "Branch is behind base branch"
+						: normalizedMergeableState === "dirty"
+							? "This pull request has merge conflicts"
+							: normalizedMergeableState === "blocked"
+								? "This pull request is blocked from merging"
+								: isMergeable
+									? null
+									: `Merge unavailable (${mergeableState})`;
+	const isMergeButtonDisabled = mergeDisabledReason !== null;
 
 	const hasError =
 		Result.isFailure(mergeResult) ||
 		Result.isFailure(branchUpdateResult) ||
-		Result.isFailure(stateResult);
+		Result.isFailure(stateResult) ||
+		Result.isFailure(syncPullRequestResult);
+
+	const mergeButton = (
+		<Button
+			size="sm"
+			disabled={isMergeButtonDisabled}
+			onClick={() => {
+				doMerge({
+					correlationId: `${correlationPrefix}-merge-${Date.now()}`,
+					ownerLogin,
+					name,
+					repositoryId,
+					number,
+				});
+			}}
+			className={cn(
+				"h-8 text-xs flex-1",
+				isMergeable &&
+					"bg-github-open hover:bg-github-open/90 text-primary-foreground",
+			)}
+		>
+			{isMerging ? "Merging..." : "Merge pull request"}
+		</Button>
+	);
 
 	return (
 		<div className="space-y-2">
-			{/* Close / Reopen + Update branch */}
-			<div className="flex items-center gap-2">
-				{canUpdateBranch && (
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={isUpdatingBranch}
-						className="h-8 text-xs"
-						onClick={() => {
-							doUpdateBranch({
-								correlationId: `${correlationPrefix}-update-branch-${Date.now()}`,
-								ownerLogin,
-								name,
-								repositoryId,
-								number,
-								expectedHeadSha: headSha,
-							});
-						}}
-					>
-						{isUpdatingBranch ? "Updating..." : "Update branch"}
-					</Button>
-				)}
-				{state === "open" && (
+			{canUpdateBranch && (
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={isUpdatingBranch}
+					className="h-8 text-xs w-full"
+					onClick={() => {
+						doUpdateBranch({
+							correlationId: `${correlationPrefix}-update-branch-${Date.now()}`,
+							ownerLogin,
+							name,
+							repositoryId,
+							number,
+							expectedHeadSha: headSha,
+						});
+					}}
+				>
+					{isUpdatingBranch ? "Updating..." : "Update branch"}
+				</Button>
+			)}
+
+			{state === "open" && (
+				<div className="flex items-center gap-2">
 					<Button
 						variant="ghost"
 						size="sm"
 						disabled={isUpdatingState}
-						className="h-8 text-xs text-muted-foreground"
+						className="h-8 text-xs text-muted-foreground flex-1"
 						onClick={() => {
 							doUpdateState({
 								correlationId: `${correlationPrefix}-close-${Date.now()}`,
@@ -3037,55 +3040,46 @@ function PrActionBar({
 					>
 						{isUpdatingState ? "Closing..." : "Close"}
 					</Button>
-				)}
-				{state === "closed" && (
-					<Button
-						variant="outline"
-						size="sm"
-						disabled={isUpdatingState}
-						className="h-8 text-xs flex-1"
-						onClick={() => {
-							doUpdateState({
-								correlationId: `${correlationPrefix}-reopen-${Date.now()}`,
-								ownerLogin,
-								name,
-								repositoryId,
-								number,
-								state: "open",
-							});
-						}}
-					>
-						{isUpdatingState ? "Reopening..." : "Reopen"}
-					</Button>
-				)}
-			</div>
+					{mergeDisabledReason === null ? (
+						mergeButton
+					) : (
+						<Tooltip>
+							<TooltipTrigger asChild>
+								<span className="block flex-1 cursor-not-allowed">
+									{mergeButton}
+								</span>
+							</TooltipTrigger>
+							<TooltipContent>{mergeDisabledReason}</TooltipContent>
+						</Tooltip>
+					)}
+				</div>
+			)}
 
-			{/* Merge — spaced below close */}
-			{state === "open" && (
+			{state === "closed" && (
 				<Button
+					variant="outline"
 					size="sm"
-					disabled={!isMergeable || isMerging}
+					disabled={isUpdatingState}
+					className="h-8 text-xs w-full"
 					onClick={() => {
-						doMerge({
-							correlationId: `${correlationPrefix}-merge-${Date.now()}`,
+						doUpdateState({
+							correlationId: `${correlationPrefix}-reopen-${Date.now()}`,
 							ownerLogin,
 							name,
 							repositoryId,
 							number,
+							state: "open",
 						});
 					}}
-					className={cn(
-						"h-8 text-xs w-full mt-2",
-						isMergeable &&
-							"bg-github-open hover:bg-github-open/90 text-primary-foreground",
-					)}
 				>
-					{isMerging ? "Merging..." : "Merge pull request"}
+					{isUpdatingState ? "Reopening..." : "Reopen"}
 				</Button>
 			)}
 
 			{hasError && (
 				<p className="text-xs text-destructive">
+					{Result.isFailure(syncPullRequestResult) &&
+						"Could not refresh mergeability. "}
 					{Result.isFailure(mergeResult) && "Merge failed. "}
 					{Result.isFailure(branchUpdateResult) && "Branch update failed. "}
 					{Result.isFailure(stateResult) && "State update failed."}
@@ -3116,7 +3110,7 @@ function ReviewSubmitSection({
 }) {
 	const writeClient = useGithubWrite();
 	const [reviewResult, submitReview] = useAtom(
-		writeClient.submitPrReview.mutate,
+		writeClient.submitPrReview.call,
 		{ mode: "promise" },
 	);
 	const [body, setBody] = useState("");
@@ -3281,13 +3275,11 @@ function ReviewSubmitSection({
 			</Button>
 			{Result.isFailure(reviewResult) && (
 				<p className="mt-1.5 text-[11px] text-destructive">
-					{extractInteractionError(reviewResult, "Could not queue review")}
+					{extractInteractionError(reviewResult, "Could not submit review")}
 				</p>
 			)}
 			{isSuccess && (
-				<p className="mt-1.5 text-[11px] text-github-open">
-					Review queued. Syncing with GitHub...
-				</p>
+				<p className="mt-1.5 text-[11px] text-github-open">Review submitted.</p>
 			)}
 		</div>
 	);
@@ -3437,7 +3429,8 @@ function ReviewerChip({
 			label: "Pending",
 		},
 	};
-	const config = stateConfig[review.state] ?? {
+	const normalizedState = normalizeReviewState(review.state);
+	const config = stateConfig[normalizedState] ?? {
 		dotClass: "bg-muted-foreground",
 		label: review.state,
 	};
@@ -3504,7 +3497,11 @@ function ReviewStateBadge({ state }: { state: string }) {
 		},
 		PENDING: { label: "Pending", variant: "outline" },
 	};
-	const c = config[state] ?? { label: state, variant: "outline" as const };
+	const normalizedState = normalizeReviewState(state);
+	const c = config[normalizedState] ?? {
+		label: state,
+		variant: "outline" as const,
+	};
 	return (
 		<Badge variant={c.variant} className={cn("text-xs", c.className)}>
 			{c.label}
