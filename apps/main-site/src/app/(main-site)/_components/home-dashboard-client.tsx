@@ -1,6 +1,6 @@
 "use client";
 
-import { useSubscriptionWithInitial } from "@packages/confect/rpc";
+import { Result, useAtomValue } from "@effect-atom/atom-react";
 import { Badge } from "@packages/ui/components/badge";
 import { Button } from "@packages/ui/components/button";
 import {
@@ -11,6 +11,7 @@ import {
 	CommandLinkItem,
 	CommandList,
 } from "@packages/ui/components/command";
+import { useConvexAuthState } from "@packages/ui/components/convex-client-provider";
 import {
 	CircleDot,
 	GitBranch,
@@ -19,10 +20,12 @@ import {
 } from "@packages/ui/components/icons";
 import { Link } from "@packages/ui/components/link";
 import { ScrollArea } from "@packages/ui/components/scroll-area";
+import { Skeleton } from "@packages/ui/components/skeleton";
 import { GitHubIcon } from "@packages/ui/icons/index";
 import { authClient } from "@packages/ui/lib/auth-client";
 import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
+import { Option } from "effect";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { triggerOpenSearchCommand } from "./search-command-events";
@@ -82,8 +85,12 @@ type DashboardQuery = {
 function useDashboardData(
 	initialData: DashboardData,
 	query: DashboardQuery,
-): DashboardData {
+): {
+	readonly data: DashboardData;
+	readonly isWaitingForSignedInData: boolean;
+} {
 	const session = authClient.useSession();
+	const { isReadyForQueries } = useConvexAuthState();
 	const client = useProjectionQueries();
 	const dashboardAtom = useMemo(
 		() =>
@@ -92,12 +99,30 @@ function useDashboardData(
 					ownerLogin: query.ownerLogin,
 				},
 				{
-					enabled: !session.isPending,
+					enabled: isReadyForQueries,
 				},
 			),
-		[client, query.ownerLogin, session.isPending],
+		[client, query.ownerLogin, isReadyForQueries],
 	);
-	return useSubscriptionWithInitial(dashboardAtom, initialData);
+	const result = useAtomValue(dashboardAtom);
+	const valueOption = Result.value(result);
+
+	if (Option.isSome(valueOption)) {
+		return {
+			data: valueOption.value,
+			isWaitingForSignedInData: false,
+		};
+	}
+
+	const isWaitingForSignedInData =
+		session.data !== null &&
+		initialData.githubLogin === null &&
+		Result.isInitial(result);
+
+	return {
+		data: initialData,
+		isWaitingForSignedInData,
+	};
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +190,14 @@ export function CommandPaletteClient({
 	initialData: DashboardData;
 	query: DashboardQuery;
 }) {
-	const data = useDashboardData(initialData, query);
+	const { data, isWaitingForSignedInData } = useDashboardData(
+		initialData,
+		query,
+	);
+
+	if (isWaitingForSignedInData) {
+		return <Skeleton className="h-10 w-full rounded-lg" />;
+	}
 
 	return (
 		<DashboardCommandPalette
@@ -368,7 +400,14 @@ export function PrColumnClient({
 	initialData: DashboardData;
 	query: DashboardQuery;
 }) {
-	const data = useDashboardData(initialData, query);
+	const { data, isWaitingForSignedInData } = useDashboardData(
+		initialData,
+		query,
+	);
+
+	if (isWaitingForSignedInData) {
+		return <DashboardColumnSkeleton title="Pull Requests" />;
+	}
 
 	return (
 		<Column
@@ -397,7 +436,14 @@ export function IssuesColumnClient({
 	initialData: DashboardData;
 	query: DashboardQuery;
 }) {
-	const data = useDashboardData(initialData, query);
+	const { data, isWaitingForSignedInData } = useDashboardData(
+		initialData,
+		query,
+	);
+
+	if (isWaitingForSignedInData) {
+		return <DashboardColumnSkeleton title="Issues" />;
+	}
 
 	return (
 		<Column
@@ -429,7 +475,14 @@ export function ReposColumnClient({
 	initialData: DashboardData;
 	query: DashboardQuery;
 }) {
-	const data = useDashboardData(initialData, query);
+	const { data, isWaitingForSignedInData } = useDashboardData(
+		initialData,
+		query,
+	);
+
+	if (isWaitingForSignedInData) {
+		return <DashboardColumnSkeleton title="Repositories" />;
+	}
 
 	return (
 		<Column
@@ -477,6 +530,31 @@ function Column({
 			</div>
 			<div className="overflow-hidden rounded-lg border border-border/60 bg-card/30">
 				<ScrollArea className="h-[calc(100vh-220px)]">{children}</ScrollArea>
+			</div>
+		</section>
+	);
+}
+
+function DashboardColumnSkeleton({ title }: { title: string }) {
+	return (
+		<section className="min-w-0">
+			<div className="mb-1.5 flex items-center justify-between gap-2">
+				<h2 className="text-[11px] font-semibold uppercase tracking-wider text-foreground/80">
+					{title}
+				</h2>
+			</div>
+			<div className="overflow-hidden rounded-lg border border-border/60 bg-card/30">
+				<div className="space-y-2 p-2">
+					{[1, 2, 3].map((i) => (
+						<div key={i} className="flex items-center gap-2">
+							<Skeleton className="size-8 rounded-md" />
+							<div className="flex-1 space-y-1">
+								<Skeleton className="h-3.5 w-3/4" />
+								<Skeleton className="h-2.5 w-1/2" />
+							</div>
+						</div>
+					))}
+				</div>
 			</div>
 		</section>
 	);
