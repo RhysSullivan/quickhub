@@ -15,12 +15,26 @@ import authSchema from "./betterAuth/schema";
 const authFunctions: AuthFunctions = internal.auth;
 
 const STATIC_TRUSTED_ORIGINS = [
+	"https://fastergh.com",
+	"https://www.fastergh.com",
 	"http://localhost:4007",
 	"http://localhost:3000",
 	"https://localhost:4007",
 	"https://localhost:3000",
 	"https://local.rhys.dev",
 ];
+
+const getTrustedOrigins = () => {
+	const origins = [...STATIC_TRUSTED_ORIGINS];
+	if (siteUrl !== undefined && siteUrl.length > 0) {
+		try {
+			origins.push(new URL(siteUrl).origin);
+		} catch {
+			// Ignore invalid SITE_URL format; static defaults still apply.
+		}
+	}
+	return origins;
+};
 
 const GitHubUserSchema = Schema.Struct({
 	id: Schema.Number,
@@ -93,7 +107,7 @@ const siteUrl = process.env.SITE_URL;
 export const createAuthOptions = (ctx: GenericCtx) => {
 	return {
 		baseURL: siteUrl,
-		trustedOrigins: STATIC_TRUSTED_ORIGINS,
+		trustedOrigins: getTrustedOrigins,
 		advanced: {
 			disableCSRFCheck: true,
 		},

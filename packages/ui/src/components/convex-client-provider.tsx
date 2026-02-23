@@ -123,6 +123,35 @@ export function ConvexClientProvider({ children }: { children: ReactNode }) {
 	const [isConvexAuthSynced, setConvexAuthSynced] = useState(false);
 
 	useEffect(() => {
+		const url = new URL(window.location.href);
+		const oneTimeToken = url.searchParams.get("ott");
+		if (oneTimeToken === null) {
+			return;
+		}
+
+		void (async () => {
+			try {
+				const verifyResult = await authClient.crossDomain.oneTimeToken.verify({
+					token: oneTimeToken,
+				});
+				const sessionFromOtt = verifyResult.data?.session;
+				if (sessionFromOtt !== undefined && sessionFromOtt !== null) {
+					await authClient.getSession({
+						fetchOptions: {
+							headers: {
+								Authorization: `Bearer ${sessionFromOtt.token}`,
+							},
+						},
+					});
+				}
+			} finally {
+				url.searchParams.delete("ott");
+				window.history.replaceState({}, "", url.toString());
+			}
+		})();
+	}, []);
+
+	useEffect(() => {
 		if (isPending) {
 			setConvexAuthSynced(false);
 			return;
