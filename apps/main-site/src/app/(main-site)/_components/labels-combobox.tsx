@@ -21,6 +21,7 @@ import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Option } from "effect";
 import { useId, useMemo, useState } from "react";
+import { getGithubLabelColorClass } from "@/lib/github-label-colors";
 
 export function LabelsCombobox({
 	ownerLogin,
@@ -155,8 +156,11 @@ export function LabelsCombobox({
 					{currentLabels.map((label) => (
 						<Badge
 							key={label}
-							variant="secondary"
-							className="text-[10px] gap-1 group"
+							variant="outline"
+							className={cn(
+								"text-[10px] gap-1 group",
+								getGithubLabelColorClass(label),
+							)}
 						>
 							{label}
 							<button
