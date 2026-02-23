@@ -268,14 +268,14 @@ const ensureNextRequestDataAccess = async () => {
 		return;
 	}
 
-	// `next/headers` request APIs only exist in Next.js server runtime.
-	// Skip this check in tests and non-Next environments.
-	if (process.env.NEXT_RUNTIME === undefined) {
+	// `next/headers` exists only in Next.js server runtime. Attempt import and
+	// request binding opportunistically; skip in tests and non-Next environments.
+	try {
+		const { headers } = await import("next/headers");
+		await headers();
+	} catch {
 		return;
 	}
-
-	const { headers } = await import("next/headers");
-	await headers();
 };
 
 const withRpcClientSpan = <A>(
@@ -864,20 +864,27 @@ export function createServerRpcQuery<
 
 	const AUTH_SCOPE_CACHE_LIMIT = 256;
 
-	const getAuthToken = (): Effect.Effect<string | null> => {
+	const resolveAuthToken = async (): Promise<string | null> => {
 		if (config.getAuthToken === undefined) {
-			return Effect.succeed(null);
+			return null;
 		}
 
-		const resolveToken = config.getAuthToken;
-		return Effect.promise(() => resolveToken()).pipe(
-			Effect.map((token) => {
-				if (token === null || token === undefined || token.length === 0) {
-					return null;
-				}
-				return token;
-			}),
-		);
+		const token = await config.getAuthToken();
+		if (token === null || token === undefined || token.length === 0) {
+			return null;
+		}
+
+		const trimmed = token.trim();
+		if (trimmed.length === 0) {
+			return null;
+		}
+
+		if (trimmed.startsWith("Bearer ")) {
+			const bearerValue = trimmed.slice("Bearer ".length).trim();
+			return bearerValue.length === 0 ? null : bearerValue;
+		}
+
+		return trimmed;
 	};
 
 	const resetAuthScopeCaches = () => {
@@ -962,8 +969,12 @@ export function createServerRpcQuery<
 			if (typeof decodedKey.endpointName !== "string") {
 				return Effect.die(new Error("Invalid server RPC endpoint cache key"));
 			}
+			if (!("authScope" in decodedKey) || typeof decodedKey.authScope !== "string") {
+				return Effect.die(new Error("Invalid server RPC auth scope cache key"));
+			}
 
 			const endpointName = decodedKey.endpointName;
+			const authScope = decodedKey.authScope;
 			const fullPayload = decodedKey.payload;
 			const convexFn = convexFnRegistry.get(endpointName);
 			if (!convexFn) {
@@ -971,11 +982,11 @@ export function createServerRpcQuery<
 					new Error(`No registered Convex function for endpoint "${endpointName}"`),
 				);
 			}
-			return createQueryEffect(
-				endpointName,
-				convexFn,
-				fullPayload,
-				false,
+
+			const requestLayer = authLayerByScope.get(authScope) ?? defaultLayer;
+			return Effect.provide(
+				createQueryEffect(endpointName, convexFn, fullPayload, false),
+				requestLayer,
 			);
 		},
 	});
@@ -1009,22 +1020,23 @@ export function createServerRpcQuery<
 			endpoint = {
 				queryPromise: async (payload: unknown) => {
 					await ensureNextRequestDataAccess();
+					const authToken = await resolveAuthToken();
+					const authScope = getAuthScope(authToken);
 
 					const payloadObject =
 						payload !== null && typeof payload === "object" ? payload : {};
 					const fullPayload = { ...getShared(), ...payloadObject };
+					const cacheKey = JSON.stringify({
+						authScope,
+						endpointName: prop,
+						payload: fullPayload,
+					});
+					getLayerForScope(authScope, authToken);
+
 					return Effect.runPromise(
 						Effect.gen(function* () {
-							const authToken = yield* getAuthToken();
-							const authScope = getAuthScope(authToken);
-							const cacheKey = JSON.stringify({
-								authScope,
-								endpointName: prop,
-								payload: fullPayload,
-							});
-							const requestLayer = getLayerForScope(authScope, authToken);
 							const queryCache = yield* Effect.sync(getOrCreateQueryCache);
-							return yield* Effect.provide(queryCache.get(cacheKey), requestLayer);
+							return yield* queryCache.get(cacheKey);
 						}),
 					);
 				},

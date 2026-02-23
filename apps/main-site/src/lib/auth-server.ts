@@ -1,10 +1,9 @@
 import { convexBetterAuthNextJs } from "@convex-dev/better-auth/nextjs";
 
-// Public production defaults — same values are shipped in the client bundle.
 const CONVEX_URL =
-	process.env.CONVEX_URL ?? "https://descriptive-caiman-974.convex.cloud";
+	process.env.CONVEX_URL ?? process.env.NEXT_PUBLIC_CONVEX_URL ?? "";
 const CONVEX_SITE_URL =
-	process.env.CONVEX_SITE_URL ?? "https://descriptive-caiman-974.convex.site";
+	process.env.CONVEX_SITE_URL ?? process.env.NEXT_PUBLIC_CONVEX_SITE_URL ?? "";
 
 export const {
 	handler,
@@ -17,4 +16,19 @@ export const {
 } = convexBetterAuthNextJs({
 	convexUrl: CONVEX_URL,
 	convexSiteUrl: CONVEX_SITE_URL,
+	jwtCache: {
+		enabled: true,
+		expirationToleranceSeconds: 60,
+		isAuthError: (error) => {
+			if (error instanceof Error) {
+				const message = error.message.toLowerCase();
+				return (
+					message.includes("unauthenticated") ||
+					message.includes("unauthorized") ||
+					message.includes("not authenticated")
+				);
+			}
+			return false;
+		},
+	},
 });

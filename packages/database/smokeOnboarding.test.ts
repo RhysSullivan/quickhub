@@ -341,18 +341,37 @@ describe("Repository Onboarding Smoke Test", () => {
 					}),
 				);
 
-				// Step 3: Process all pending events via batch processor
-				const batchResult = yield* Effect.promise(() =>
-					t.mutation(internal.rpc.webhookProcessor.processAllPending, {}),
-				);
-				const batch = assertSuccess(batchResult) as {
-					processed: number;
-					retried: number;
-					deadLettered: number;
-				};
-				expect(batch.processed).toBe(7);
-				expect(batch.retried).toBe(0);
-				expect(batch.deadLettered).toBe(0);
+				// Step 3: Drain pending events via repeated batch processing
+				let totalProcessed = 0;
+				let totalRetried = 0;
+				let totalDeadLettered = 0;
+
+				for (let attempt = 0; attempt < 10; attempt++) {
+					const batchResult = yield* Effect.promise(() =>
+						t.mutation(internal.rpc.webhookProcessor.processAllPending, {}),
+					);
+					const batch = assertSuccess(batchResult) as {
+						processed: number;
+						retried: number;
+						deadLettered: number;
+					};
+
+					totalProcessed += batch.processed;
+					totalRetried += batch.retried;
+					totalDeadLettered += batch.deadLettered;
+
+					if (
+						batch.processed === 0 &&
+						batch.retried === 0 &&
+						batch.deadLettered === 0
+					) {
+						break;
+					}
+				}
+
+				expect(totalProcessed).toBe(7);
+				expect(totalRetried).toBe(0);
+				expect(totalDeadLettered).toBe(0);
 
 				// Step 4: Verify domain tables
 

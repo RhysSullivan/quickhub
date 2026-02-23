@@ -6,6 +6,7 @@ import {
 } from "@packages/confect/rpc";
 import { Context, Effect, Either, Schema } from "effect";
 import { internal } from "../_generated/api";
+import { authComponent } from "../auth";
 import { RepoPermissionLevelSchema } from "../shared/permissions";
 
 type RepoPermissionLevel = Schema.Schema.Type<typeof RepoPermissionLevelSchema>;
@@ -168,6 +169,11 @@ type VerifiedAdminTokenValue = {
 	verified: true;
 };
 
+type AuthenticatedAdminUserValue = {
+	userId: string;
+	role: string | null;
+};
+
 export class AuthenticatedUser extends Context.Tag(
 	"@fastergh/AuthenticatedUser",
 )<AuthenticatedUser, AuthenticatedUserValue>() {}
@@ -175,6 +181,10 @@ export class AuthenticatedUser extends Context.Tag(
 export class VerifiedAdminToken extends Context.Tag(
 	"@fastergh/VerifiedAdminToken",
 )<VerifiedAdminToken, VerifiedAdminTokenValue>() {}
+
+export class AuthenticatedAdminUser extends Context.Tag(
+	"@fastergh/AuthenticatedAdminUser",
+)<AuthenticatedAdminUser, AuthenticatedAdminUserValue>() {}
 
 export class AdminAccessViolation extends Schema.TaggedError<AdminAccessViolation>()(
 	"AdminAccessViolation",
@@ -185,6 +195,20 @@ export class AdminAccessViolation extends Schema.TaggedError<AdminAccessViolatio
 			"invalid_token",
 		),
 		message: Schema.String,
+	},
+) {}
+
+export class AdminRoleAccessViolation extends Schema.TaggedError<AdminRoleAccessViolation>()(
+	"AdminRoleAccessViolation",
+	{
+		reason: Schema.Literal(
+			"not_authenticated",
+			"missing_admin_role",
+			"invalid_identity",
+		),
+		message: Schema.String,
+		userId: Schema.NullOr(Schema.String),
+		role: Schema.NullOr(Schema.String),
 	},
 ) {}
 
@@ -754,6 +778,42 @@ const authorizeAdminToken = (
 		return { verified: true };
 	});
 
+const authorizeAdminRole = (
+	options: MiddlewareOptions,
+): Effect.Effect<AuthenticatedAdminUserValue, AdminRoleAccessViolation> =>
+	Effect.gen(function* () {
+		const user = yield* Effect.promise(() =>
+			authComponent.safeGetAuthUser(options.ctx),
+		).pipe(Effect.orDie);
+
+		if (user === null || user === undefined) {
+			return yield* Effect.die(
+				new AdminRoleAccessViolation({
+					reason: "not_authenticated",
+					message: "Authentication is required",
+					userId: null,
+					role: null,
+				}),
+			);
+		}
+
+		const role = user.role ?? null;
+		const userId = user._id;
+
+		if (role !== "admin") {
+			return yield* Effect.die(
+				new AdminRoleAccessViolation({
+					reason: "missing_admin_role",
+					message: "Admin role is required (role=admin)",
+					userId,
+					role,
+				}),
+			);
+		}
+
+		return { userId, role };
+	});
+
 export class RequireAuthenticatedMiddleware extends RpcMiddleware.Tag<RequireAuthenticatedMiddleware>()(
 	"RequireAuthenticatedMiddleware",
 	{
@@ -767,6 +827,14 @@ export class AdminTokenMiddleware extends RpcMiddleware.Tag<AdminTokenMiddleware
 	{
 		provides: VerifiedAdminToken,
 		failure: AdminAccessViolation,
+	},
+) {}
+
+export class RequireAdminRoleMiddleware extends RpcMiddleware.Tag<RequireAdminRoleMiddleware>()(
+	"RequireAdminRoleMiddleware",
+	{
+		provides: AuthenticatedAdminUser,
+		failure: AdminRoleAccessViolation,
 	},
 ) {}
 
@@ -868,6 +936,9 @@ export const DatabaseSecurityMiddlewareImplementations: ReadonlyArray<Middleware
 	[
 		middleware(AdminTokenMiddleware, (options: MiddlewareOptions) =>
 			authorizeAdminToken(options),
+		),
+		middleware(RequireAdminRoleMiddleware, (options: MiddlewareOptions) =>
+			authorizeAdminRole(options),
 		),
 		middleware(RequireAuthenticatedMiddleware, (options: MiddlewareOptions) =>
 			Effect.gen(function* () {

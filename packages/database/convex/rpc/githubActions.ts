@@ -523,6 +523,8 @@ const resolveRepositoryIdByNameDef = factory.internalQuery({
 	success: Schema.NullOr(Schema.Number),
 });
 
+const REPOSITORY_LOOKUP_SCAN_LIMIT = 5000;
+
 // ---------------------------------------------------------------------------
 // Implementations
 // ---------------------------------------------------------------------------
@@ -582,15 +584,6 @@ const syncPermissionsForUser = (userId: string) =>
 			};
 		}
 
-		const connectedRepoIdsRaw = yield* ctx.runQuery(
-			internal.rpc.githubActions.listConnectedRepoIds,
-			{},
-		);
-		const connectedRepoIds = Schema.decodeUnknownSync(
-			Schema.Array(Schema.Number),
-		)(connectedRepoIdsRaw);
-		const connectedRepoIdSet = new Set(connectedRepoIds);
-
 		const gh = yield* Effect.provide(
 			GitHubApiClient,
 			GitHubApiClient.fromToken(accessToken),
@@ -599,6 +592,7 @@ const syncPermissionsForUser = (userId: string) =>
 		const repoPermissions: Array<
 			Schema.Schema.Type<typeof RepoPermissionItemSchema>
 		> = [];
+		const connectedRepoIds = new Set<number>();
 		const ownerUsersById = new Map<
 			number,
 			Schema.Schema.Type<typeof GitHubOwnerUserSchema>
@@ -614,12 +608,25 @@ const syncPermissionsForUser = (userId: string) =>
 			});
 
 			for (const rawRepo of repos) {
+				const connectedRepoIdRaw = yield* ctx.runQuery(
+					internal.rpc.githubActions.resolveRepositoryIdByName,
+					{
+						ownerLogin: rawRepo.owner.login,
+						name: rawRepo.name,
+					},
+				);
+				const connectedRepoId = Schema.decodeUnknownSync(
+					Schema.NullOr(Schema.Number),
+				)(connectedRepoIdRaw);
+				if (connectedRepoId === null) continue;
+
 				const permission = toRepoPermissionItem(rawRepo);
-				if (
-					permission !== null &&
-					connectedRepoIdSet.has(permission.repositoryId)
-				) {
-					repoPermissions.push(permission);
+				if (permission !== null) {
+					repoPermissions.push({
+						...permission,
+						repositoryId: connectedRepoId,
+					});
+					connectedRepoIds.add(connectedRepoId);
 					ownerUsersById.set(rawRepo.owner.id, {
 						githubUserId: rawRepo.owner.id,
 						login: rawRepo.owner.login,
@@ -640,7 +647,7 @@ const syncPermissionsForUser = (userId: string) =>
 				userId,
 				githubUserId,
 				syncedAt: Date.now(),
-				connectedRepoIds,
+				connectedRepoIds: Array.from(connectedRepoIds),
 				repoPermissions,
 				ownerUsers: [...ownerUsersById.values()],
 			},
@@ -680,11 +687,26 @@ resolveRepositoryIdByNameDef.implement((args) =>
 			)
 			.first();
 
-		if (Option.isNone(repo)) {
-			return null;
+		if (Option.isSome(repo)) {
+			return repo.value.githubRepoId;
 		}
 
-		return repo.value.githubRepoId;
+		const ownerLoginLower = args.ownerLogin.toLowerCase();
+		const nameLower = args.name.toLowerCase();
+		const candidates = yield* ctx.db
+			.query("github_repositories")
+			.take(REPOSITORY_LOOKUP_SCAN_LIMIT);
+
+		for (const candidate of candidates) {
+			if (
+				candidate.ownerLogin.toLowerCase() === ownerLoginLower &&
+				candidate.name.toLowerCase() === nameLower
+			) {
+				return candidate.githubRepoId;
+			}
+		}
+
+		return null;
 	}),
 );
 

@@ -180,6 +180,31 @@ const createAppJwt = (
 			}),
 	});
 
+/**
+ * Create a GitHub App JWT using configured app credentials.
+ */
+export const getAppJwt = (): Effect.Effect<
+	string,
+	GitHubAppConfigMissing | GitHubAppTokenError
+> =>
+	Effect.gen(function* () {
+		const appClientId = process.env.GITHUB_CLIENT_ID;
+		if (!appClientId) {
+			return yield* new GitHubAppConfigMissing({
+				field: "GITHUB_CLIENT_ID",
+			});
+		}
+
+		const privateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+		if (!privateKey) {
+			return yield* new GitHubAppConfigMissing({
+				field: "GITHUB_APP_PRIVATE_KEY",
+			});
+		}
+
+		return yield* createAppJwt(appClientId, privateKey);
+	}).pipe(Effect.withSpan("github_app.getAppJwt"));
+
 // ---------------------------------------------------------------------------
 // Installation token fetching
 // ---------------------------------------------------------------------------

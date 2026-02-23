@@ -1,7 +1,16 @@
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 
-export function proxy(_request: NextRequest) {
+export function proxy(request: NextRequest) {
+	if (request.nextUrl.pathname.startsWith("/_internal/")) {
+		const rewritten = request.nextUrl.clone();
+		rewritten.pathname = request.nextUrl.pathname.replace(
+			"/_internal/",
+			"/internal/",
+		);
+		return NextResponse.rewrite(rewritten);
+	}
+
 	return NextResponse.next();
 }
 

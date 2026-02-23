@@ -1,5 +1,5 @@
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
-import { Array as Arr, Effect, Option, Schema } from "effect";
+import { Array as Arr, Effect, Either, Option, Schema } from "effect";
 import { internal } from "../_generated/api";
 import {
 	ConfectActionCtx,
@@ -13,9 +13,13 @@ import {
 	prsByRepo,
 	webhooksByState,
 } from "../shared/aggregates";
-import { getInstallationToken } from "../shared/githubApp";
+import { getAppJwt, getInstallationToken } from "../shared/githubApp";
 import { DatabaseRpcModuleMiddlewares } from "./moduleMiddlewares";
-import { AdminTokenMiddleware } from "./security";
+import {
+	AdminTokenMiddleware,
+	AuthenticatedAdminUser,
+	RequireAdminRoleMiddleware,
+} from "./security";
 
 const factory = createRpcFactory({ schema: confectSchema });
 
@@ -165,6 +169,37 @@ const systemStatusDef = factory
 // Implementations
 // ---------------------------------------------------------------------------
 
+const WEBHOOK_COUNT_CAP = 10_001;
+const WEBHOOK_DIRECT_STATE_CAP = 500;
+
+const countCapped = (items: Array<unknown>) => Math.min(items.length, 10_000);
+
+const countWebhookEventsByState = (
+	ctx: ConfectQueryCtx,
+	processState: "pending" | "retry" | "processed" | "failed",
+) =>
+	processState === "processed"
+		? Effect.promise(() =>
+				webhooksByState.count(ctx.rawCtx, { namespace: processState }),
+			)
+		: ctx.db
+				.query("github_webhook_events_raw")
+				.withIndex("by_processState_and_receivedAt", (q) =>
+					q.eq("processState", processState),
+				)
+				.take(WEBHOOK_DIRECT_STATE_CAP + 1)
+				.pipe(
+					Effect.flatMap((items) =>
+						items.length <= WEBHOOK_DIRECT_STATE_CAP
+							? Effect.succeed(items.length)
+							: Effect.promise(() =>
+									webhooksByState.count(ctx.rawCtx, {
+										namespace: processState,
+									}),
+								),
+					),
+				);
+
 healthCheckDef.implement((_args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
@@ -182,7 +217,7 @@ tableCountsDef.implement((_args) =>
 		const raw = ctx.rawCtx;
 
 		// Small tables (<10k) — bounded .take() is fine
-		const cap = 10001;
+		const cap = WEBHOOK_COUNT_CAP;
 		const count = (items: Array<unknown>) => Math.min(items.length, 10000);
 
 		const repositories = yield* ctx.db.query("github_repositories").take(cap);
@@ -229,16 +264,13 @@ tableCountsDef.implement((_args) =>
 			.query("github_pull_request_reviews")
 			.take(cap);
 
-		// Webhook events — use aggregate by summing known states
 		const [webhookPending, webhookProcessed, webhookRetry, webhookFailed] =
-			yield* Effect.promise(() =>
-				Promise.all([
-					webhooksByState.count(raw, { namespace: "pending" }),
-					webhooksByState.count(raw, { namespace: "processed" }),
-					webhooksByState.count(raw, { namespace: "retry" }),
-					webhooksByState.count(raw, { namespace: "failed" }),
-				]),
-			);
+			yield* Effect.all([
+				countWebhookEventsByState(ctx, "pending"),
+				countWebhookEventsByState(ctx, "processed"),
+				countWebhookEventsByState(ctx, "retry"),
+				countWebhookEventsByState(ctx, "failed"),
+			]);
 
 		return {
 			repositories: count(repositories),
@@ -300,22 +332,18 @@ repairProjectionsDef.implement(() =>
 queueHealthDef.implement(() =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
-		const raw = ctx.rawCtx;
 
-		// O(log n) counts via webhooksByState aggregate
-		const [pending, retry, processed, failed] = yield* Effect.promise(() =>
-			Promise.all([
-				webhooksByState.count(raw, { namespace: "pending" }),
-				webhooksByState.count(raw, { namespace: "retry" }),
-				webhooksByState.count(raw, { namespace: "processed" }),
-				webhooksByState.count(raw, { namespace: "failed" }),
-			]),
-		);
+		const [pending, retry, processed, failed] = yield* Effect.all([
+			countWebhookEventsByState(ctx, "pending"),
+			countWebhookEventsByState(ctx, "retry"),
+			countWebhookEventsByState(ctx, "processed"),
+			countWebhookEventsByState(ctx, "failed"),
+		]);
 
 		// Dead letters are a separate table, typically small
 		const deadLetters = yield* ctx.db
 			.query("github_dead_letters")
-			.take(10001)
+			.take(WEBHOOK_COUNT_CAP)
 			.pipe(Effect.map((items) => Math.min(items.length, 10000)));
 
 		return {
@@ -331,19 +359,15 @@ queueHealthDef.implement(() =>
 systemStatusDef.implement((_args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
-		const raw = ctx.rawCtx;
 		const now = Date.now();
-		const cap = 10001;
+		const cap = WEBHOOK_COUNT_CAP;
 		const count = (items: Array<unknown>) => Math.min(items.length, 10000);
 
-		// -- Queue health (O(log n) via aggregates) --
-		const [queuePending, queueRetry, queueFailed] = yield* Effect.promise(() =>
-			Promise.all([
-				webhooksByState.count(raw, { namespace: "pending" }),
-				webhooksByState.count(raw, { namespace: "retry" }),
-				webhooksByState.count(raw, { namespace: "failed" }),
-			]),
-		);
+		const [queuePending, queueRetry, queueFailed] = yield* Effect.all([
+			countWebhookEventsByState(ctx, "pending"),
+			countWebhookEventsByState(ctx, "retry"),
+			countWebhookEventsByState(ctx, "failed"),
+		]);
 
 		const deadLetterItems = yield* ctx.db
 			.query("github_dead_letters")
@@ -646,6 +670,21 @@ interface GitHubInstallationReposPage {
 	repositories: Array<GitHubInstallationRepo>;
 }
 
+interface GitHubRepositoryLookup {
+	id: number;
+}
+
+interface GitHubRepoInstallationLookup {
+	id: number;
+	account: {
+		id: number;
+		login: string;
+		type: string;
+	};
+	permissions: Record<string, string>;
+	events: Array<string>;
+}
+
 /**
  * Fetch all repos for an installation from the GitHub API, handling pagination.
  */
@@ -816,6 +855,14 @@ upsertInstallationReposDef.implement((args) =>
 				updatedRepoCount++;
 				yield* ctx.db.patch(existingRepo.value._id, {
 					installationId: args.installationId,
+					ownerId: repo.ownerId,
+					ownerLogin: repo.ownerLogin,
+					name: repo.name,
+					fullName: repo.fullName,
+					private: repo.isPrivate,
+					visibility: repo.isPrivate ? "private" : "public",
+					defaultBranch: repo.defaultBranch,
+					githubUpdatedAt: now,
 					cachedAt: now,
 					stargazersCount: repo.stargazersCount,
 				});
@@ -823,6 +870,63 @@ upsertInstallationReposDef.implement((args) =>
 		}
 
 		return { newRepoCount, updatedRepoCount };
+	}),
+);
+
+/**
+ * Internal mutation: upsert installation metadata discovered from GitHub's
+ * repo-installation lookup endpoint.
+ */
+const upsertInstallationFromLookupDef = factory.internalMutation({
+	payload: {
+		installationId: Schema.Number,
+		accountId: Schema.Number,
+		accountLogin: Schema.String,
+		accountType: Schema.Literal("User", "Organization"),
+		permissionsDigest: Schema.String,
+		eventsDigest: Schema.String,
+	},
+	success: Schema.Struct({
+		upserted: Schema.Boolean,
+	}),
+});
+
+upsertInstallationFromLookupDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectMutationCtx;
+		const now = Date.now();
+
+		const existing = yield* ctx.db
+			.query("github_installations")
+			.withIndex("by_installationId", (q) =>
+				q.eq("installationId", args.installationId),
+			)
+			.first();
+
+		if (Option.isSome(existing)) {
+			yield* ctx.db.patch(existing.value._id, {
+				accountId: args.accountId,
+				accountLogin: args.accountLogin,
+				accountType: args.accountType,
+				suspendedAt: null,
+				permissionsDigest: args.permissionsDigest,
+				eventsDigest: args.eventsDigest,
+				updatedAt: now,
+			});
+		} else {
+			yield* ctx.db.insert("github_installations", {
+				installationId: args.installationId,
+				accountId: args.accountId,
+				accountLogin: args.accountLogin,
+				accountType: args.accountType,
+				suspendedAt: null,
+				permissionsDigest: args.permissionsDigest,
+				eventsDigest: args.eventsDigest,
+				updatedAt: now,
+			});
+		}
+
+		return { upserted: true };
 	}),
 );
 
@@ -952,6 +1056,190 @@ resyncInstallationReposDef.implement((args) =>
 );
 
 /**
+ * Internal action: resolve installation for a repo via GitHub App API,
+ * upsert installation metadata, and schedule an installation resync.
+ */
+const ensureRepoInstallationAndResyncDef = factory.internalAction({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+	},
+	success: Schema.Struct({
+		ownerLogin: Schema.String,
+		name: Schema.String,
+		repositoryId: Schema.NullOr(Schema.Number),
+		installationId: Schema.NullOr(Schema.Number),
+		installationUpserted: Schema.Boolean,
+		resyncScheduled: Schema.Boolean,
+		message: Schema.String,
+	}),
+});
+
+ensureRepoInstallationAndResyncDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectActionCtx;
+		const ownerLogin = args.ownerLogin;
+		const name = args.name;
+		const repoUrl = `https://api.github.com/repos/${ownerLogin}/${name}`;
+		const installationUrl = `${repoUrl}/installation`;
+
+		const repoResponse = yield* Effect.tryPromise({
+			try: () =>
+				fetch(repoUrl, {
+					headers: {
+						Accept: "application/vnd.github+json",
+						"X-GitHub-Api-Version": "2022-11-28",
+					},
+				}),
+			catch: (cause) =>
+				new Error(`GitHub repo lookup request failed: ${cause}`),
+		});
+
+		if (repoResponse.status === 404) {
+			return {
+				ownerLogin,
+				name,
+				repositoryId: null,
+				installationId: null,
+				installationUpserted: false,
+				resyncScheduled: false,
+				message: "Repository not found on GitHub",
+			};
+		}
+
+		if (!repoResponse.ok) {
+			const body = yield* Effect.tryPromise({
+				try: () => repoResponse.text(),
+				catch: (cause) =>
+					new Error(`Failed to read GitHub repo lookup body: ${cause}`),
+			});
+			return {
+				ownerLogin,
+				name,
+				repositoryId: null,
+				installationId: null,
+				installationUpserted: false,
+				resyncScheduled: false,
+				message: `GitHub repo lookup failed (${repoResponse.status}): ${body.slice(0, 300)}`,
+			};
+		}
+
+		const repository: GitHubRepositoryLookup = yield* Effect.tryPromise({
+			try: () => repoResponse.json(),
+			catch: (cause) =>
+				new Error(`Failed to parse GitHub repo lookup response: ${cause}`),
+		});
+
+		const appJwtEither = yield* Effect.either(getAppJwt());
+		if (Either.isLeft(appJwtEither)) {
+			return {
+				ownerLogin,
+				name,
+				repositoryId: repository.id,
+				installationId: null,
+				installationUpserted: false,
+				resyncScheduled: false,
+				message: `Unable to create GitHub App JWT: ${String(appJwtEither.left)}`,
+			};
+		}
+
+		const installationResponse = yield* Effect.tryPromise({
+			try: () =>
+				fetch(installationUrl, {
+					headers: {
+						Authorization: `Bearer ${appJwtEither.right}`,
+						Accept: "application/vnd.github+json",
+						"X-GitHub-Api-Version": "2022-11-28",
+					},
+				}),
+			catch: (cause) =>
+				new Error(`GitHub installation lookup request failed: ${cause}`),
+		});
+
+		if (installationResponse.status === 404) {
+			return {
+				ownerLogin,
+				name,
+				repositoryId: repository.id,
+				installationId: null,
+				installationUpserted: false,
+				resyncScheduled: false,
+				message:
+					"GitHub App is not installed on this repository (or not granted access)",
+			};
+		}
+
+		if (!installationResponse.ok) {
+			const body = yield* Effect.tryPromise({
+				try: () => installationResponse.text(),
+				catch: (cause) =>
+					new Error(`Failed to read GitHub installation lookup body: ${cause}`),
+			});
+			return {
+				ownerLogin,
+				name,
+				repositoryId: repository.id,
+				installationId: null,
+				installationUpserted: false,
+				resyncScheduled: false,
+				message: `GitHub installation lookup failed (${installationResponse.status}): ${body.slice(0, 300)}`,
+			};
+		}
+
+		const installation: GitHubRepoInstallationLookup = yield* Effect.tryPromise(
+			{
+				try: () => installationResponse.json(),
+				catch: (cause) =>
+					new Error(
+						`Failed to parse GitHub installation lookup response: ${cause}`,
+					),
+			},
+		);
+
+		const accountType =
+			installation.account.type === "Organization" ? "Organization" : "User";
+
+		yield* ctx.runMutation(internal.rpc.admin.upsertInstallationFromLookup, {
+			installationId: installation.id,
+			accountId: installation.account.id,
+			accountLogin: installation.account.login,
+			accountType,
+			permissionsDigest: JSON.stringify(installation.permissions),
+			eventsDigest: JSON.stringify(installation.events),
+		});
+
+		yield* Effect.promise(() =>
+			ctx.scheduler.runAfter(0, internal.rpc.admin.resyncInstallationRepos, {
+				installationId: installation.id,
+			}),
+		);
+
+		return {
+			ownerLogin,
+			name,
+			repositoryId: repository.id,
+			installationId: installation.id,
+			installationUpserted: true,
+			resyncScheduled: true,
+			message: `Installation ${installation.id} upserted and resync scheduled`,
+		};
+	}).pipe(
+		Effect.catchAll((error) =>
+			Effect.succeed({
+				ownerLogin: args.ownerLogin,
+				name: args.name,
+				repositoryId: null,
+				installationId: null,
+				installationUpserted: false,
+				resyncScheduled: false,
+				message: `ensureRepoInstallationAndResync failed: ${String(error)}`,
+			}),
+		),
+		Effect.orDie,
+	),
+);
+
+/**
  * Internal query: list installations for resync.
  */
 const listInstallationsForResyncDef = factory.internalQuery({
@@ -980,6 +1268,7 @@ listInstallationsForResyncDef.implement((args) =>
 				.first();
 
 			if (Option.isNone(inst)) return [];
+			if (inst.value.suspendedAt !== null) return [];
 			return [
 				{
 					installationId: inst.value.installationId,
@@ -990,10 +1279,261 @@ listInstallationsForResyncDef.implement((args) =>
 
 		// All installations with a real installationId (not placeholder 0)
 		const all = yield* ctx.db.query("github_installations").collect();
-		return Arr.filter(all, (i) => i.installationId > 0).map((i) => ({
+		return Arr.filter(
+			all,
+			(i) => i.installationId > 0 && i.suspendedAt === null,
+		).map((i) => ({
 			installationId: i.installationId,
 			accountLogin: i.accountLogin,
 		}));
+	}),
+);
+
+const suspendInstallationDef = factory.internalMutation({
+	payload: {
+		installationId: Schema.Number,
+		reason: Schema.String,
+	},
+	success: Schema.Struct({
+		suspended: Schema.Boolean,
+	}),
+});
+
+suspendInstallationDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectMutationCtx;
+		const installation = yield* ctx.db
+			.query("github_installations")
+			.withIndex("by_installationId", (q) =>
+				q.eq("installationId", args.installationId),
+			)
+			.first();
+
+		if (Option.isNone(installation)) {
+			return { suspended: false };
+		}
+
+		yield* ctx.db.patch(installation.value._id, {
+			suspendedAt: Date.now(),
+			eventsDigest: `suspended:${args.reason}`,
+			updatedAt: Date.now(),
+		});
+
+		return { suspended: true };
+	}),
+);
+
+const suspendUnreachableInstallationsDef = factory.internalAction({
+	payload: {
+		limit: Schema.optional(Schema.Number),
+	},
+	success: Schema.Struct({
+		checked: Schema.Number,
+		suspended: Schema.Number,
+		notFound: Schema.Array(Schema.Number),
+	}),
+});
+
+suspendUnreachableInstallationsDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectActionCtx;
+		const limit = args.limit ?? 25;
+
+		const installationsRaw = yield* ctx.runQuery(
+			internal.rpc.admin.listInstallationsForResync,
+			{},
+		);
+		const installations = Schema.decodeUnknownSync(
+			Schema.Array(
+				Schema.Struct({
+					installationId: Schema.Number,
+					accountLogin: Schema.String,
+				}),
+			),
+		)(installationsRaw);
+
+		let checked = 0;
+		let suspended = 0;
+		const notFound: Array<number> = [];
+
+		for (const installation of installations.slice(0, limit)) {
+			const tokenResult = yield* Effect.either(
+				getInstallationToken(installation.installationId),
+			);
+			checked++;
+
+			if (Either.isRight(tokenResult)) {
+				continue;
+			}
+
+			const error = tokenResult.left;
+			if (error._tag === "GitHubAppTokenError" && error.status === 404) {
+				notFound.push(installation.installationId);
+				const suspendResultRaw = yield* ctx.runMutation(
+					internal.rpc.admin.suspendInstallation,
+					{
+						installationId: installation.installationId,
+						reason: "installation_not_found_404",
+					},
+				);
+				const suspendResult = Schema.decodeUnknownSync(
+					Schema.Struct({ suspended: Schema.Boolean }),
+				)(suspendResultRaw);
+				if (suspendResult.suspended) {
+					suspended++;
+				}
+			}
+		}
+
+		if (suspended > 0) {
+			console.info(
+				`[admin] suspendUnreachableInstallations: checked=${checked} suspended=${suspended}`,
+			);
+		}
+
+		return {
+			checked,
+			suspended,
+			notFound,
+		};
+	}),
+);
+
+const DashboardDeadLetter = Schema.Struct({
+	deliveryId: Schema.String,
+	reason: Schema.String,
+	createdAt: Schema.Number,
+	source: Schema.String,
+});
+
+const dashboardSnapshotDef = factory
+	.query({
+		success: Schema.Struct({
+			viewer: Schema.Struct({
+				userId: Schema.String,
+				role: Schema.NullOr(Schema.String),
+			}),
+			generatedAt: Schema.Number,
+			queue: Schema.Struct({
+				pending: Schema.Number,
+				retry: Schema.Number,
+				processed: Schema.Number,
+				failed: Schema.Number,
+				deadLetters: Schema.Number,
+			}),
+			counts: Schema.Struct({
+				installations: Schema.Number,
+				repositories: Schema.Number,
+				syncJobs: Schema.Number,
+			}),
+			stuckBootstraps: Schema.Array(StuckBootstrapInfo),
+			deadLetters: Schema.Struct({
+				bootstrap: Schema.Array(DashboardDeadLetter),
+				webhook: Schema.Array(DashboardDeadLetter),
+			}),
+			installations: Schema.Array(
+				Schema.Struct({
+					installationId: Schema.Number,
+					accountLogin: Schema.String,
+				}),
+			),
+		}),
+	})
+	.middleware(RequireAdminRoleMiddleware);
+
+dashboardSnapshotDef.implement(() =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectQueryCtx;
+		const viewer = yield* AuthenticatedAdminUser;
+		const now = Date.now();
+		const cap = 10_001;
+
+		const [pending, retry, processed, failed] = yield* Effect.all([
+			countWebhookEventsByState(ctx, "pending"),
+			countWebhookEventsByState(ctx, "retry"),
+			countWebhookEventsByState(ctx, "processed"),
+			countWebhookEventsByState(ctx, "failed"),
+		]);
+
+		const deadLetters = yield* ctx.db.query("github_dead_letters").take(cap);
+		const deadLetterCount = Math.min(deadLetters.length, 10_000);
+
+		const repositories = yield* ctx.db.query("github_repositories").take(cap);
+		const syncJobs = yield* ctx.db.query("github_sync_jobs").take(cap);
+		const allInstallations = yield* ctx.db
+			.query("github_installations")
+			.collect();
+
+		const installations = Arr.filter(
+			allInstallations,
+			(installation) => installation.installationId > 0,
+		).map((installation) => ({
+			installationId: installation.installationId,
+			accountLogin: installation.accountLogin,
+		}));
+
+		const cutoff = now - 30 * 60 * 1000;
+		const runningJobs = yield* ctx.db
+			.query("github_sync_jobs")
+			.withIndex("by_state_and_nextRunAt", (q) => q.eq("state", "running"))
+			.collect();
+
+		const stuckBootstraps = runningJobs
+			.filter((job) => job.updatedAt < cutoff)
+			.map((job) => ({
+				lockKey: job.lockKey,
+				repositoryId: job.repositoryId,
+				state: job.state,
+				currentStep: job.currentStep ?? null,
+				lastError: job.lastError,
+				updatedAt: job.updatedAt,
+				stuckForMs: now - job.updatedAt,
+			}));
+
+		const bootstrapDeadLetters = yield* ctx.db
+			.query("github_dead_letters")
+			.withIndex("by_source_and_createdAt", (q) => q.eq("source", "bootstrap"))
+			.order("desc")
+			.take(10);
+
+		const webhookDeadLetters = yield* ctx.db
+			.query("github_dead_letters")
+			.withIndex("by_source_and_createdAt", (q) => q.eq("source", "webhook"))
+			.order("desc")
+			.take(10);
+
+		return {
+			viewer,
+			generatedAt: now,
+			queue: {
+				pending,
+				retry,
+				processed,
+				failed,
+				deadLetters: deadLetterCount,
+			},
+			counts: {
+				installations: installations.length,
+				repositories: Math.min(repositories.length, 10_000),
+				syncJobs: Math.min(syncJobs.length, 10_000),
+			},
+			stuckBootstraps,
+			deadLetters: {
+				bootstrap: bootstrapDeadLetters.map((item) => ({
+					deliveryId: item.deliveryId,
+					reason: item.reason,
+					createdAt: item.createdAt,
+					source: item.source,
+				})),
+				webhook: webhookDeadLetters.map((item) => ({
+					deliveryId: item.deliveryId,
+					reason: item.reason,
+					createdAt: item.createdAt,
+					source: item.source,
+				})),
+			},
+			installations,
+		};
 	}),
 );
 
@@ -1015,7 +1555,12 @@ const adminModule = makeRpcModule(
 		listDeadLetters: listDeadLettersDef,
 		resyncInstallationRepos: resyncInstallationReposDef,
 		upsertInstallationRepos: upsertInstallationReposDef,
+		upsertInstallationFromLookup: upsertInstallationFromLookupDef,
+		ensureRepoInstallationAndResync: ensureRepoInstallationAndResyncDef,
 		listInstallationsForResync: listInstallationsForResyncDef,
+		suspendInstallation: suspendInstallationDef,
+		suspendUnreachableInstallations: suspendUnreachableInstallationsDef,
+		dashboardSnapshot: dashboardSnapshotDef,
 	},
 	{ middlewares: DatabaseRpcModuleMiddlewares },
 );
@@ -1033,7 +1578,12 @@ export const {
 	listDeadLetters,
 	resyncInstallationRepos,
 	upsertInstallationRepos,
+	upsertInstallationFromLookup,
+	ensureRepoInstallationAndResync,
 	listInstallationsForResync,
+	suspendInstallation,
+	suspendUnreachableInstallations,
+	dashboardSnapshot,
 } = adminModule.handlers;
 export { adminModule };
 export type AdminModule = typeof adminModule;

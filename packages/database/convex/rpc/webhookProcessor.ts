@@ -1203,17 +1203,20 @@ const handleInstallationEvent = (
 					`[webhookProcessor] Installation created: ${installationId} (${accountLogin})`,
 				);
 
-				const createdRepos = parseInstallationRepositories(
-					payload.repositories,
+				// Avoid heavy repo upserts in the webhook mutation itself.
+				// The resync action fetches the full installation repo list and
+				// schedules chunked upserts.
+				yield* Effect.promise(() =>
+					ctx.scheduler.runAfter(
+						0,
+						internal.rpc.admin.resyncInstallationRepos,
+						{ installationId },
+					),
 				);
-				const createdRepoCount =
-					yield* upsertInstallationRepositories(createdRepos);
 
-				if (createdRepoCount > 0) {
-					yield* scheduleInstallationPermissionSync(payload).pipe(
-						Effect.ignoreLogged,
-					);
-				}
+				yield* scheduleInstallationPermissionSync(payload).pipe(
+					Effect.ignoreLogged,
+				);
 			} else if (action === "deleted" && Option.isSome(existing)) {
 				const reposForInstallation = yield* ctx.db
 					.query("github_repositories")
@@ -1279,14 +1282,29 @@ const handleInstallationEvent = (
 		if (eventName === "installation_repositories") {
 			// Repos added to the installation
 			const added = parseInstallationRepositories(payload.repositories_added);
-			const newRepoCount = yield* upsertInstallationRepositories(added);
+			if (added.length > 0) {
+				if (added.length <= INLINE_INSTALLATION_ADDED_UPSERT_LIMIT) {
+					const newRepoCount = yield* upsertInstallationRepositories(added);
 
-			// When new repos are added, sync permissions for the user who
-			// triggered the installation so their sidebar updates immediately.
-			if (newRepoCount > 0) {
-				yield* scheduleInstallationPermissionSync(payload).pipe(
-					Effect.ignoreLogged,
-				);
+					// When new repos are added, sync permissions for the user who
+					// triggered the installation so their sidebar updates immediately.
+					if (newRepoCount > 0) {
+						yield* scheduleInstallationPermissionSync(payload).pipe(
+							Effect.ignoreLogged,
+						);
+					}
+				} else {
+					yield* Effect.promise(() =>
+						ctx.scheduler.runAfter(
+							0,
+							internal.rpc.admin.resyncInstallationRepos,
+							{ installationId },
+						),
+					);
+					yield* scheduleInstallationPermissionSync(payload).pipe(
+						Effect.ignoreLogged,
+					);
+				}
 			}
 
 			// Repos removed from the installation
@@ -1586,16 +1604,62 @@ const extractActivityInfo = (
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Maximum events to process per batch invocation (stay within mutation budget).
- *  Each event requires JSON parsing plus multiple index lookups and aggregate
- *  B-tree syncs (~40-55 document reads per event). The cron fires every 2s. */
-const BATCH_SIZE = 5;
+/** Maximum events to process per batch invocation. */
+const BATCH_SIZE = 4;
+
+/**
+ * Scan a wider pending window, then prioritize installation lifecycle events
+ * within that window before processing.
+ */
+const PENDING_LOOKAHEAD_MULTIPLIER = 6;
+
+/**
+ * Inline-upsert a small added repo list, but defer larger lists to the
+ * resync action so webhook processing stays lightweight.
+ */
+const INLINE_INSTALLATION_ADDED_UPSERT_LIMIT = 10;
 
 /** Maximum processing attempts before dead-lettering */
 const MAX_ATTEMPTS = 5;
 
 /** Base backoff delay in ms — actual delay = BACKOFF_BASE_MS * 2^(attempt-1) */
 const BACKOFF_BASE_MS = 1_000;
+
+/**
+ * Keep CI status-churn events in a lower-priority lane so they don't block
+ * installation/onboarding and primary repo entity updates.
+ */
+const LOW_PRIORITY_EVENT_ACTIONS = new Set([
+	"check_run:created",
+	"check_run:completed",
+	"workflow_job:queued",
+	"workflow_job:in_progress",
+	"workflow_job:completed",
+	"workflow_run:requested",
+	"workflow_run:in_progress",
+	"workflow_run:completed",
+	"push:",
+]);
+
+const LOW_PRIORITY_BATCH_BUDGET = Math.max(1, Math.floor(BATCH_SIZE / 4));
+const NORMAL_PRIORITY_BATCH_BUDGET = 1;
+const WEBHOOK_STATE_DIRECT_COUNT_LIMIT = 500;
+
+const isInstallationLifecycleEvent = (event: {
+	eventName: string;
+	repositoryId: number | null;
+}): boolean =>
+	event.repositoryId === null &&
+	(event.eventName === "installation" ||
+		event.eventName === "installation_repositories");
+
+const isLowPriorityEvent = (event: {
+	eventName: string;
+	action: string | null;
+}): boolean => {
+	const action = event.action ?? "";
+	return LOW_PRIORITY_EVENT_ACTIONS.has(`${event.eventName}:${action}`);
+};
 
 // ---------------------------------------------------------------------------
 // Retry / backoff helpers
@@ -1935,17 +1999,77 @@ processAllPendingDef.implement(() =>
 		let processed = 0;
 		let retried = 0;
 		let deadLettered = 0;
+		const pendingLookaheadSize = BATCH_SIZE * PENDING_LOOKAHEAD_MULTIPLIER;
 
 		const pendingEvents = yield* ctx.db
 			.query("github_webhook_events_raw")
 			.withIndex("by_processState_and_receivedAt", (q) =>
 				q.eq("processState", "pending"),
 			)
-			.take(BATCH_SIZE);
+			.take(pendingLookaheadSize);
 
-		for (const event of pendingEvents) {
-			const payload: Record<string, unknown> = JSON.parse(event.payloadJson);
+		const installationEvents = Arr.filter(
+			pendingEvents,
+			isInstallationLifecycleEvent,
+		);
+		const nonInstallationEvents = Arr.filter(
+			pendingEvents,
+			(event) => !isInstallationLifecycleEvent(event),
+		);
+		const lowPriorityEvents = Arr.filter(
+			nonInstallationEvents,
+			isLowPriorityEvent,
+		);
+		const normalPriorityEvents = Arr.filter(
+			nonInstallationEvents,
+			(event) => !isLowPriorityEvent(event),
+		);
+
+		const installationSelection = installationEvents.slice(0, BATCH_SIZE);
+		const remainingAfterInstallations =
+			BATCH_SIZE - installationSelection.length;
+		const normalSelection = normalPriorityEvents.slice(
+			0,
+			Math.min(remainingAfterInstallations, NORMAL_PRIORITY_BATCH_BUDGET),
+		);
+		const remainingAfterNormal =
+			remainingAfterInstallations - normalSelection.length;
+		const lowPriorityBudget = Math.min(
+			LOW_PRIORITY_BATCH_BUDGET,
+			remainingAfterNormal,
+		);
+		const lowPrioritySelection = lowPriorityEvents.slice(0, lowPriorityBudget);
+		const remainingAfterLow =
+			remainingAfterNormal - lowPrioritySelection.length;
+		const normalTopUp =
+			remainingAfterLow > 0
+				? normalPriorityEvents.slice(
+						normalSelection.length,
+						normalSelection.length + remainingAfterLow,
+					)
+				: [];
+		const remainingAfterNormalTopUp = remainingAfterLow - normalTopUp.length;
+
+		const lowPriorityTopUp =
+			remainingAfterNormalTopUp > 0
+				? lowPriorityEvents.slice(
+						lowPrioritySelection.length,
+						lowPrioritySelection.length + remainingAfterNormalTopUp,
+					)
+				: [];
+
+		const prioritizedPendingEvents = [
+			...installationSelection,
+			...normalSelection,
+			...lowPrioritySelection,
+			...normalTopUp,
+			...lowPriorityTopUp,
+		].slice(0, BATCH_SIZE);
+
+		for (const event of prioritizedPendingEvents) {
 			const repositoryId = event.repositoryId;
+
+			const payload: Record<string, unknown> = JSON.parse(event.payloadJson);
 
 			// Events without a repo — handle installation lifecycle, skip others
 			if (repositoryId === null) {
@@ -1966,15 +2090,6 @@ processAllPendingDef.implement(() =>
 					yield* syncWebhookReplace(ctx.rawCtx, event, updatedEvent.value);
 				}
 				processed++;
-
-				// Installation events are heavy (repo inserts + bootstrap scheduling).
-				// Process at most one per batch run to stay within the mutation CPU budget.
-				if (
-					event.eventName === "installation" ||
-					event.eventName === "installation_repositories"
-				) {
-					return { processed, retried, deadLettered };
-				}
 				continue;
 			}
 
@@ -2040,7 +2155,7 @@ processAllPendingDef.implement(() =>
 		// Structured log for operational visibility
 		if (processed > 0 || retried > 0 || deadLettered > 0) {
 			console.info(
-				`[webhookProcessor] processAllPending: processed=${processed} retried=${retried} deadLettered=${deadLettered} batchSize=${pendingEvents.length}`,
+				`[webhookProcessor] processAllPending: processed=${processed} retried=${retried} deadLettered=${deadLettered} batchSize=${prioritizedPendingEvents.length} scanned=${pendingEvents.length} installCandidates=${installationEvents.length} normalCandidates=${normalPriorityEvents.length} lowCandidates=${lowPriorityEvents.length}`,
 			);
 		}
 
@@ -2090,26 +2205,31 @@ getQueueHealthDef.implement(() =>
 		const raw = ctx.rawCtx;
 
 		const countByState = (state: "pending" | "retry" | "failed") =>
-			Effect.tryPromise({
-				try: () => webhooksByState.count(raw, { namespace: state }),
-				catch: (error) => new Error(String(error)),
-			}).pipe(
-				Effect.catchAll((error) => {
-					if (
-						error.message.includes('Component "') &&
-						error.message.includes("is not registered")
-					) {
-						return ctx.db
-							.query("github_webhook_events_raw")
-							.withIndex("by_processState_and_receivedAt", (q) =>
-								q.eq("processState", state),
-							)
-							.take(10001)
-							.pipe(Effect.map((items) => Math.min(items.length, 10000)));
-					}
-					return Effect.die(error);
-				}),
-			);
+			ctx.db
+				.query("github_webhook_events_raw")
+				.withIndex("by_processState_and_receivedAt", (q) =>
+					q.eq("processState", state),
+				)
+				.take(WEBHOOK_STATE_DIRECT_COUNT_LIMIT + 1)
+				.pipe(
+					Effect.flatMap((items) =>
+						items.length <= WEBHOOK_STATE_DIRECT_COUNT_LIMIT
+							? Effect.succeed(items.length)
+							: Effect.tryPromise({
+									try: () => webhooksByState.count(raw, { namespace: state }),
+									catch: (error) => new Error(String(error)),
+								}),
+					),
+					Effect.catchAll((error) => {
+						if (
+							error.message.includes('Component "') &&
+							error.message.includes("is not registered")
+						) {
+							return Effect.succeed(WEBHOOK_STATE_DIRECT_COUNT_LIMIT);
+						}
+						return Effect.die(error);
+					}),
+				);
 
 		// O(log n) counts via webhooksByState aggregate
 		const [pending, retry, failed] = yield* Effect.all([

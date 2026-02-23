@@ -3,7 +3,7 @@
  *
  * Two workers run on a regular cadence:
  *
- * 1. **Process pending** (every 10 seconds)
+ * 1. **Process pending** (every 1 second)
  *    Picks up events with processState="pending" and dispatches them
  *    through the handler pipeline. Successful events are marked "processed";
  *    failures get exponential backoff retries.
@@ -30,10 +30,10 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
-// Process pending webhook events every 2 seconds
+// Process pending webhook events every second
 crons.interval(
 	"process pending webhook events",
-	{ seconds: 2 },
+	{ seconds: 1 },
 	internal.rpc.webhookProcessor.processAllPending,
 	{},
 );
@@ -52,6 +52,22 @@ crons.interval(
 	{ hours: 1 },
 	internal.rpc.githubActions.syncStalePermissions,
 	{},
+);
+
+// Restart bootstraps that have been stuck for 30+ minutes.
+crons.interval(
+	"restart stuck bootstraps",
+	{ minutes: 10 },
+	internal.rpc.admin.restartStuckBootstraps,
+	{ thresholdMs: 30 * 60 * 1000, restart: true },
+);
+
+// Suspend stale/unreachable installations (GitHub returns installation 404).
+crons.interval(
+	"suspend unreachable installations",
+	{ minutes: 30 },
+	internal.rpc.admin.suspendUnreachableInstallations,
+	{ limit: 20 },
 );
 
 export default crons;

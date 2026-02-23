@@ -3,9 +3,9 @@ import {
 	createClient,
 	type GenericCtx,
 } from "@convex-dev/better-auth";
-import { convex } from "@convex-dev/better-auth/plugins";
+import { convex, crossDomain } from "@convex-dev/better-auth/plugins";
 import { type BetterAuthOptions, betterAuth } from "better-auth/minimal";
-import { genericOAuth } from "better-auth/plugins";
+import { admin, genericOAuth } from "better-auth/plugins";
 import { type GenericDataModel, queryGeneric } from "convex/server";
 import { Either, Schema } from "effect";
 import { components, internal } from "./_generated/api";
@@ -13,6 +13,14 @@ import authConfig from "./auth.config";
 import authSchema from "./betterAuth/schema";
 
 const authFunctions: AuthFunctions = internal.auth;
+
+const STATIC_TRUSTED_ORIGINS = [
+	"http://localhost:4007",
+	"http://localhost:3000",
+	"https://localhost:4007",
+	"https://localhost:3000",
+	"https://local.rhys.dev",
+];
 
 const GitHubUserSchema = Schema.Struct({
 	id: Schema.Number,
@@ -85,11 +93,23 @@ const siteUrl = process.env.SITE_URL;
 export const createAuthOptions = (ctx: GenericCtx) => {
 	return {
 		baseURL: siteUrl,
+		trustedOrigins: STATIC_TRUSTED_ORIGINS,
+		advanced: {
+			disableCSRFCheck: true,
+		},
 		database: authComponent.adapter(ctx),
 		account: {
 			accountLinking: {
 				enabled: true,
 				allowDifferentEmails: false,
+			},
+		},
+		user: {
+			additionalFields: {
+				role: {
+					type: "string",
+					required: false,
+				},
 			},
 		},
 		socialProviders: {
@@ -147,6 +167,12 @@ export const createAuthOptions = (ctx: GenericCtx) => {
 						},
 					},
 				],
+			}),
+			admin({
+				impersonationSessionDuration: 60 * 60,
+			}),
+			crossDomain({
+				siteUrl: siteUrl ?? "http://localhost:4007",
 			}),
 			convex({
 				authConfig,

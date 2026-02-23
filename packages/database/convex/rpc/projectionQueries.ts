@@ -4,7 +4,7 @@ import {
 	PaginationResultSchema,
 } from "@packages/confect";
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
-import { Effect, Option, Schema } from "effect";
+import { Array as Arr, Effect, Option, Predicate, Schema } from "effect";
 import { components, internal } from "../_generated/api";
 import { ConfectMutationCtx, ConfectQueryCtx, confectSchema } from "../confect";
 import {
@@ -15,6 +15,7 @@ import {
 	prsByRepo,
 	reviewsByPrNumber,
 } from "../shared/aggregates";
+import { evaluateRepoPermissionWithDb } from "../shared/permissions";
 import { DatabaseRpcModuleMiddlewares } from "./moduleMiddlewares";
 import {
 	ReadGitHubRepoByNameMiddleware,
@@ -604,25 +605,23 @@ const getPullRequestDetailDef = factory
  *
  * Returns null if no sync job exists (repo was never synced).
  */
-const getSyncProgressDef = factory
-	.query({
-		payload: {
-			ownerLogin: Schema.String,
-			name: Schema.String,
-		},
-		success: Schema.NullOr(
-			Schema.Struct({
-				state: Schema.Literal("pending", "running", "retry", "done", "failed"),
-				currentStep: Schema.NullOr(Schema.String),
-				completedSteps: Schema.Array(Schema.String),
-				itemsFetched: Schema.Number,
-				lastError: Schema.NullOr(Schema.String),
-				startedAt: Schema.Number,
-				updatedAt: Schema.Number,
-			}),
-		),
-	})
-	.middleware(ReadGitHubRepoByNameMiddleware);
+const getSyncProgressDef = factory.query({
+	payload: {
+		ownerLogin: Schema.String,
+		name: Schema.String,
+	},
+	success: Schema.NullOr(
+		Schema.Struct({
+			state: Schema.Literal("pending", "running", "retry", "done", "failed"),
+			currentStep: Schema.NullOr(Schema.String),
+			completedSteps: Schema.Array(Schema.String),
+			itemsFetched: Schema.Number,
+			lastError: Schema.NullOr(Schema.String),
+			startedAt: Schema.Number,
+			updatedAt: Schema.Number,
+		}),
+	),
+});
 
 // ---------------------------------------------------------------------------
 // Home dashboard — cross-repo aggregate
@@ -787,7 +786,6 @@ const computeRepoCounts = (repositoryId: number) =>
 const ANONYMOUS_FEATURED_REPO_LIMIT = 10;
 const PERSONALIZED_REPO_LIMIT = 50;
 const REPOSITORY_SCAN_LIMIT = 400;
-const INSTALLATION_SCAN_LIMIT = 200;
 
 /** Maximum repos to fetch detailed PR/issue/activity data for on the dashboard. */
 const DASHBOARD_DETAIL_REPO_LIMIT = 15;
@@ -832,18 +830,20 @@ const sortFeaturedPublicRepos = <
 const selectSidebarAndDashboardRepos = Effect.gen(function* () {
 	const ctx = yield* ConfectQueryCtx;
 	const identity = yield* ctx.auth.getUserIdentity();
-	const allRepos = yield* ctx.db
-		.query("github_repositories")
-		.take(REPOSITORY_SCAN_LIMIT);
 
-	const publicRepos = allRepos.filter((repo) => !repo.private);
-	const featuredPublicRepos = sortFeaturedPublicRepos(publicRepos).slice(
-		0,
-		ANONYMOUS_FEATURED_REPO_LIMIT,
-	);
+	const loadFeaturedPublicRepos = Effect.gen(function* () {
+		const allRepos = yield* ctx.db
+			.query("github_repositories")
+			.take(REPOSITORY_SCAN_LIMIT);
+		const publicRepos = allRepos.filter((repo) => !repo.private);
+		return sortFeaturedPublicRepos(publicRepos).slice(
+			0,
+			ANONYMOUS_FEATURED_REPO_LIMIT,
+		);
+	});
 
 	if (Option.isNone(identity)) {
-		return featuredPublicRepos;
+		return yield* loadFeaturedPublicRepos;
 	}
 
 	const userId = identity.value.subject;
@@ -858,21 +858,40 @@ const selectSidebarAndDashboardRepos = Effect.gen(function* () {
 		memberRepoIds.add(permission.repositoryId);
 	}
 
-	const reposById = new Map<number, (typeof allRepos)[number]>();
-	for (const repo of allRepos) {
-		reposById.set(repo.githubRepoId, repo);
-	}
+	const memberReposMaybe = yield* Effect.all(
+		Array.from(memberRepoIds).map((repositoryId) =>
+			Effect.gen(function* () {
+				const repo = yield* ctx.db
+					.query("github_repositories")
+					.withIndex("by_githubRepoId", (q) =>
+						q.eq("githubRepoId", repositoryId),
+					)
+					.first();
+				return Option.isSome(repo) ? repo.value : null;
+			}),
+		),
+		{ concurrency: "unbounded" },
+	);
+	const memberRepos = Arr.filter(memberReposMaybe, Predicate.isNotNull);
 
-	const memberRepos = [];
-	for (const repositoryId of memberRepoIds) {
-		const repo = reposById.get(repositoryId);
-		if (repo === undefined) continue;
-		memberRepos.push(repo);
-	}
-
-	const installations = yield* ctx.db
-		.query("github_installations")
-		.take(INSTALLATION_SCAN_LIMIT);
+	const installationIds = new Set(
+		memberRepos.map((repo) => repo.installationId),
+	);
+	const installationsMaybe = yield* Effect.all(
+		Array.from(installationIds).map((installationId) =>
+			Effect.gen(function* () {
+				const installation = yield* ctx.db
+					.query("github_installations")
+					.withIndex("by_installationId", (q) =>
+						q.eq("installationId", installationId),
+					)
+					.first();
+				return Option.isSome(installation) ? installation.value : null;
+			}),
+		),
+		{ concurrency: "unbounded" },
+	);
+	const installations = Arr.filter(installationsMaybe, Predicate.isNotNull);
 	const organizationInstallationIds = new Set<number>();
 	for (const installation of installations) {
 		if (installation.accountType === "Organization") {
@@ -898,21 +917,42 @@ const selectSidebarAndDashboardRepos = Effect.gen(function* () {
 			? [...sortedMemberOrgRepos, ...sortedMemberPersonalRepos]
 			: sortedMemberPersonalRepos;
 
-	if (personalizedRepos.length > 0) {
-		return personalizedRepos.slice(0, PERSONALIZED_REPO_LIMIT);
+	const githubLogin = yield* resolveViewerGitHub;
+	const ownedRepos =
+		githubLogin === null
+			? []
+			: yield* ctx.db
+					.query("github_repositories")
+					.withIndex("by_ownerLogin_and_name", (q) =>
+						q.eq("ownerLogin", githubLogin),
+					)
+					.take(REPOSITORY_SCAN_LIMIT);
+
+	const personalizedWithOwnedRepos = [...personalizedRepos];
+	const seenRepoIds = new Set<number>(
+		personalizedRepos.map((repo) => repo.githubRepoId),
+	);
+	for (const repo of ownedRepos) {
+		if (seenRepoIds.has(repo.githubRepoId)) {
+			continue;
+		}
+		seenRepoIds.add(repo.githubRepoId);
+		personalizedWithOwnedRepos.push(repo);
 	}
 
-	return featuredPublicRepos;
+	if (personalizedWithOwnedRepos.length > 0) {
+		return sortByRecentActivity(personalizedWithOwnedRepos).slice(
+			0,
+			PERSONALIZED_REPO_LIMIT,
+		);
+	}
+
+	return yield* loadFeaturedPublicRepos;
 });
 
 listReposDef.implement(() =>
 	Effect.gen(function* () {
 		const repos = yield* selectSidebarAndDashboardRepos;
-		const githubLogin = yield* resolveViewerGitHub;
-
-		if (githubLogin === null) {
-			return [];
-		}
 
 		const results = [];
 		for (const repo of repos) {
@@ -977,14 +1017,39 @@ getRepoOverviewDef.implement((_args) =>
 getSyncProgressDef.implement((_args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
-		const raw = ctx.rawCtx;
-		const permission = yield* ReadGitHubRepoPermission;
-		if (!permission.isAllowed || permission.repository === null) {
+		const repository = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_ownerLogin_and_name", (q) =>
+				q.eq("ownerLogin", _args.ownerLogin).eq("name", _args.name),
+			)
+			.first();
+
+		if (Option.isNone(repository)) {
 			return null;
 		}
 
-		const repositoryId = permission.repository.repositoryId;
-		const installationId = permission.repository.installationId;
+		const isPrivate = !(
+			repository.value.visibility === "public" &&
+			repository.value.private === false
+		);
+
+		const identity = yield* ctx.auth.getUserIdentity();
+		const userId = Option.isSome(identity) ? identity.value.subject : null;
+		const decision = yield* evaluateRepoPermissionWithDb(ctx.db, {
+			repositoryId: repository.value.githubRepoId,
+			isPrivate,
+			userId,
+			required: "pull",
+			requireAuthenticated: false,
+		});
+
+		if (!decision.isAllowed) {
+			return null;
+		}
+
+		const repositoryId = repository.value.githubRepoId;
+		const installationId = repository.value.installationId;
+
 		if (installationId <= 0) return null;
 
 		// Find the bootstrap sync job for this repository
@@ -996,50 +1061,12 @@ getSyncProgressDef.implement((_args) =>
 
 		if (Option.isNone(job)) return null;
 
-		// Derive itemsFetched from aggregate counts, with table-scan fallback in tests.
-		const prCount = yield* tryAggregateCount(
-			() => prsByRepo.count(raw, { namespace: repositoryId }),
-			Effect.gen(function* () {
-				const prs = yield* ctx.db
-					.query("github_pull_requests")
-					.withIndex("by_repositoryId_and_state_and_githubUpdatedAt", (q) =>
-						q.eq("repositoryId", repositoryId),
-					)
-					.collect();
-				return prs.length;
-			}),
-		);
-
-		const issueCount = yield* tryAggregateCount(
-			() => issuesByRepo.count(raw, { namespace: repositoryId }),
-			Effect.gen(function* () {
-				const issues = yield* ctx.db
-					.query("github_issues")
-					.withIndex("by_repositoryId_and_state_and_githubUpdatedAt", (q) =>
-						q.eq("repositoryId", repositoryId),
-					)
-					.collect();
-				return issues.length;
-			}),
-		);
-
-		const checkRunCount = yield* tryAggregateCount(
-			() => checkRunsByRepo.count(raw, { namespace: repositoryId }),
-			Effect.gen(function* () {
-				const checkRuns = yield* ctx.db.query("github_check_runs").collect();
-				return checkRuns.filter(
-					(checkRun) => checkRun.repositoryId === repositoryId,
-				).length;
-			}),
-		);
-		const itemsFetched = prCount + issueCount + checkRunCount;
-
 		const j = job.value;
 		return {
 			state: j.state,
 			currentStep: j.currentStep ?? null,
 			completedSteps: [...(j.completedSteps ?? [])],
-			itemsFetched,
+			itemsFetched: j.itemsFetched ?? 0,
 			lastError: j.lastError,
 			startedAt: j.createdAt,
 			updatedAt: j.updatedAt,
