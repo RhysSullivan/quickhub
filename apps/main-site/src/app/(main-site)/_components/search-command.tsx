@@ -49,6 +49,7 @@ import {
 	QueryBadgeRail,
 	renderFilterIcon,
 } from "./search-command-visuals";
+import { useSharedHomeDashboardAtom } from "./shared-projection-subscriptions";
 
 function useDebouncedValue<T>(value: T, delayMs: number): T {
 	const [debounced, setDebounced] = useState(value);
@@ -87,9 +88,6 @@ type RepoSearchItem = {
 	readonly fullName: string;
 	readonly ownerLogin: string;
 	readonly name: string;
-	readonly openPrCount: number;
-	readonly openIssueCount: number;
-	readonly failingCheckCount: number;
 	readonly lastPushAt: number | null;
 	readonly updatedAt: number;
 };
@@ -675,16 +673,9 @@ function GlobalWorkResults({
 	onSelect: (target: NavigationTarget) => void;
 }) {
 	const { isReadyForQueries } = useConvexAuthState();
-	const client = useProjectionQueries();
-	const dashboardAtom = useMemo(
-		() =>
-			client.getHomeDashboard.subscription(
-				{},
-				{
-					enabled: isReadyForQueries,
-				},
-			),
-		[client, isReadyForQueries],
+	const dashboardAtom = useSharedHomeDashboardAtom(
+		undefined,
+		isReadyForQueries,
 	);
 	const result = useAtomValue(dashboardAtom);
 
@@ -786,13 +777,17 @@ function RepoResults({
 	const client = useProjectionQueries();
 	const reposAtom = useMemo(
 		() =>
-			client.listRepos.subscription(
-				{},
+			client.searchRepos.subscription(
+				{
+					query,
+					org,
+					limit,
+				},
 				{
 					enabled: isReadyForQueries,
 				},
 			),
-		[client, isReadyForQueries],
+		[client, isReadyForQueries, limit, org, query],
 	);
 	const result = useAtomValue(reposAtom);
 
@@ -855,13 +850,6 @@ function RepoResults({
 						<IconForKind kind="repo" />
 						<div className="min-w-0 flex-1">
 							<div className="truncate text-sm">{repo.fullName}</div>
-							<div className="flex items-center gap-2 text-xs text-muted-foreground">
-								{repo.failingCheckCount > 0 && (
-									<span className="text-destructive">
-										{repo.failingCheckCount} failing checks
-									</span>
-								)}
-							</div>
 						</div>
 						<span className="text-xs text-muted-foreground">
 							{formatRelative(repo.updatedAt)}

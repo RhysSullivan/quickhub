@@ -4,7 +4,7 @@ import {
 	PaginationResultSchema,
 } from "@packages/confect";
 import { createRpcFactory, makeRpcModule } from "@packages/confect/rpc";
-import { Array as Arr, Effect, Option, Predicate, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { components, internal } from "../_generated/api";
 import { ConfectMutationCtx, ConfectQueryCtx, confectSchema } from "../confect";
 import {
@@ -49,6 +49,27 @@ const listReposDef = factory.query({
 });
 
 /**
+ * Search repositories globally across all accessible repos.
+ */
+const searchReposDef = factory.query({
+	payload: {
+		query: Schema.optional(Schema.String),
+		org: Schema.optional(Schema.String),
+		limit: Schema.optional(Schema.Number),
+	},
+	success: Schema.Array(
+		Schema.Struct({
+			repositoryId: Schema.Number,
+			fullName: Schema.String,
+			ownerLogin: Schema.String,
+			name: Schema.String,
+			lastPushAt: Schema.NullOr(Schema.Number),
+			updatedAt: Schema.Number,
+		}),
+	),
+});
+
+/**
  * Get a single repo overview by owner/name.
  */
 const getRepoOverviewDef = factory
@@ -82,6 +103,7 @@ const listPullRequestsDef = factory
 			ownerLogin: Schema.String,
 			name: Schema.String,
 			state: Schema.optional(Schema.Literal("open", "closed")),
+			limit: Schema.optional(Schema.Number),
 		},
 		success: Schema.Array(
 			Schema.Struct({
@@ -115,6 +137,7 @@ const listIssuesDef = factory
 			ownerLogin: Schema.String,
 			name: Schema.String,
 			state: Schema.optional(Schema.Literal("open", "closed")),
+			limit: Schema.optional(Schema.Number),
 		},
 		success: Schema.Array(
 			Schema.Struct({
@@ -784,8 +807,12 @@ const computeRepoCounts = (repositoryId: number) =>
 	});
 
 const ANONYMOUS_FEATURED_REPO_LIMIT = 10;
-const PERSONALIZED_REPO_LIMIT = 50;
-const REPOSITORY_SCAN_LIMIT = 400;
+const PERSONALIZED_REPO_LIMIT = 200;
+const ANONYMOUS_PUBLIC_REPO_SCAN_LIMIT = 200;
+const SEARCH_CANDIDATE_LIMIT = 200;
+const GLOBAL_REPO_SEARCH_CANDIDATE_LIMIT = 300;
+const QUERY_ENRICH_CONCURRENCY_LIMIT = 16;
+const PR_FILES_RESULT_LIMIT = 1000;
 
 /** Maximum repos to fetch detailed PR/issue/activity data for on the dashboard. */
 const DASHBOARD_DETAIL_REPO_LIMIT = 15;
@@ -807,6 +834,53 @@ const sortByRecentActivity = <
 		return a.fullName.localeCompare(b.fullName);
 	});
 
+const isRepoPrivate = (repo: {
+	readonly visibility: string;
+	readonly private: boolean;
+}) => !(repo.visibility === "public" && repo.private === false);
+
+const toRepoSearchResult = (repo: {
+	readonly githubRepoId: number;
+	readonly fullName: string;
+	readonly ownerLogin: string;
+	readonly name: string;
+	readonly pushedAt: number | null;
+	readonly githubUpdatedAt: number;
+}) => ({
+	repositoryId: repo.githubRepoId,
+	fullName: repo.fullName,
+	ownerLogin: repo.ownerLogin,
+	name: repo.name,
+	lastPushAt: repo.pushedAt,
+	updatedAt: repo.githubUpdatedAt,
+});
+
+const repoSearchScore = (
+	normalizedQuery: string,
+	repo: {
+		readonly fullName: string;
+		readonly ownerLogin: string;
+		readonly name: string;
+	},
+) => {
+	if (normalizedQuery.length === 0) return 0;
+
+	const fullName = repo.fullName.toLowerCase();
+	const ownerLogin = repo.ownerLogin.toLowerCase();
+	const name = repo.name.toLowerCase();
+
+	if (fullName === normalizedQuery) return 500;
+	if (name === normalizedQuery) return 450;
+	if (fullName.startsWith(`${normalizedQuery}/`)) return 420;
+	if (fullName.startsWith(normalizedQuery)) return 400;
+	if (name.startsWith(normalizedQuery)) return 350;
+	if (ownerLogin.startsWith(normalizedQuery)) return 300;
+	if (fullName.includes(normalizedQuery)) return 220;
+	if (name.includes(normalizedQuery)) return 180;
+	if (ownerLogin.includes(normalizedQuery)) return 120;
+	return 0;
+};
+
 const sortFeaturedPublicRepos = <
 	T extends {
 		readonly stargazersCount?: number;
@@ -827,20 +901,48 @@ const sortFeaturedPublicRepos = <
 		return a.fullName.localeCompare(b.fullName);
 	});
 
+const loadFeaturedPublicRepos = Effect.gen(function* () {
+	const ctx = yield* ConfectQueryCtx;
+	const publicRepos = yield* ctx.db
+		.query("github_repositories")
+		.withIndex("by_private_and_githubUpdatedAt", (q) => q.eq("private", false))
+		.order("desc")
+		.take(ANONYMOUS_PUBLIC_REPO_SCAN_LIMIT);
+
+	return sortFeaturedPublicRepos(publicRepos).slice(
+		0,
+		ANONYMOUS_FEATURED_REPO_LIMIT,
+	);
+});
+
+const loadReposByIds = (repositoryIds: ReadonlyArray<number>) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectQueryCtx;
+		const repoOptions = yield* Effect.forEach(
+			repositoryIds,
+			(repositoryId) =>
+				ctx.db
+					.query("github_repositories")
+					.withIndex("by_githubRepoId", (q) =>
+						q.eq("githubRepoId", repositoryId),
+					)
+					.first(),
+			{ concurrency: 16 },
+		);
+
+		const repos = [];
+		for (const repoOption of repoOptions) {
+			if (Option.isSome(repoOption)) {
+				repos.push(repoOption.value);
+			}
+		}
+
+		return repos;
+	});
+
 const selectSidebarAndDashboardRepos = Effect.gen(function* () {
 	const ctx = yield* ConfectQueryCtx;
 	const identity = yield* ctx.auth.getUserIdentity();
-
-	const loadFeaturedPublicRepos = Effect.gen(function* () {
-		const allRepos = yield* ctx.db
-			.query("github_repositories")
-			.take(REPOSITORY_SCAN_LIMIT);
-		const publicRepos = allRepos.filter((repo) => !repo.private);
-		return sortFeaturedPublicRepos(publicRepos).slice(
-			0,
-			ANONYMOUS_FEATURED_REPO_LIMIT,
-		);
-	});
 
 	if (Option.isNone(identity)) {
 		return yield* loadFeaturedPublicRepos;
@@ -858,64 +960,14 @@ const selectSidebarAndDashboardRepos = Effect.gen(function* () {
 		memberRepoIds.add(permission.repositoryId);
 	}
 
-	const memberReposMaybe = yield* Effect.all(
-		Array.from(memberRepoIds).map((repositoryId) =>
-			Effect.gen(function* () {
-				const repo = yield* ctx.db
-					.query("github_repositories")
-					.withIndex("by_githubRepoId", (q) =>
-						q.eq("githubRepoId", repositoryId),
-					)
-					.first();
-				return Option.isSome(repo) ? repo.value : null;
-			}),
-		),
-		{ concurrency: "unbounded" },
-	);
-	const memberRepos = Arr.filter(memberReposMaybe, Predicate.isNotNull);
-
-	const installationIds = new Set(
-		memberRepos.map((repo) => repo.installationId),
-	);
-	const installationsMaybe = yield* Effect.all(
-		Array.from(installationIds).map((installationId) =>
-			Effect.gen(function* () {
-				const installation = yield* ctx.db
-					.query("github_installations")
-					.withIndex("by_installationId", (q) =>
-						q.eq("installationId", installationId),
-					)
-					.first();
-				return Option.isSome(installation) ? installation.value : null;
-			}),
-		),
-		{ concurrency: "unbounded" },
-	);
-	const installations = Arr.filter(installationsMaybe, Predicate.isNotNull);
-	const organizationInstallationIds = new Set<number>();
-	for (const installation of installations) {
-		if (installation.accountType === "Organization") {
-			organizationInstallationIds.add(installation.installationId);
-		}
-	}
-
-	const memberOrgRepos = [];
-	const memberPersonalRepos = [];
-	for (const repo of memberRepos) {
-		if (organizationInstallationIds.has(repo.installationId)) {
-			memberOrgRepos.push(repo);
-			continue;
-		}
-		memberPersonalRepos.push(repo);
-	}
-
-	const sortedMemberOrgRepos = sortByRecentActivity(memberOrgRepos);
-	const sortedMemberPersonalRepos = sortByRecentActivity(memberPersonalRepos);
-
-	const personalizedRepos =
-		sortedMemberOrgRepos.length > 0
-			? [...sortedMemberOrgRepos, ...sortedMemberPersonalRepos]
-			: sortedMemberPersonalRepos;
+	const memberRepos = yield* loadReposByIds([...memberRepoIds]);
+	const connectedRepos = yield* ctx.db
+		.query("github_repositories")
+		.withIndex("by_connectedByUserId_and_githubUpdatedAt", (q) =>
+			q.eq("connectedByUserId", userId),
+		)
+		.order("desc")
+		.collect();
 
 	const githubLogin = yield* resolveViewerGitHub;
 	const ownedRepos =
@@ -926,12 +978,19 @@ const selectSidebarAndDashboardRepos = Effect.gen(function* () {
 					.withIndex("by_ownerLogin_and_name", (q) =>
 						q.eq("ownerLogin", githubLogin),
 					)
-					.take(REPOSITORY_SCAN_LIMIT);
+					.collect();
 
-	const personalizedWithOwnedRepos = [...personalizedRepos];
+	const personalizedWithOwnedRepos = [...memberRepos];
 	const seenRepoIds = new Set<number>(
-		personalizedRepos.map((repo) => repo.githubRepoId),
+		memberRepos.map((repo) => repo.githubRepoId),
 	);
+	for (const repo of connectedRepos) {
+		if (seenRepoIds.has(repo.githubRepoId)) {
+			continue;
+		}
+		seenRepoIds.add(repo.githubRepoId);
+		personalizedWithOwnedRepos.push(repo);
+	}
 	for (const repo of ownedRepos) {
 		if (seenRepoIds.has(repo.githubRepoId)) {
 			continue;
@@ -950,32 +1009,158 @@ const selectSidebarAndDashboardRepos = Effect.gen(function* () {
 	return yield* loadFeaturedPublicRepos;
 });
 
+searchReposDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectQueryCtx;
+		const identity = yield* ctx.auth.getUserIdentity();
+		const userId = Option.isSome(identity) ? identity.value.subject : null;
+
+		const normalizedQuery = (args.query ?? "").trim().toLowerCase();
+		const normalizedOrg = (args.org ?? "").trim().toLowerCase();
+		const maxResults = Math.min(Math.max(args.limit ?? 12, 1), 50);
+
+		if (normalizedQuery.length === 0) {
+			const repos = yield* selectSidebarAndDashboardRepos;
+			const filteredRepos =
+				normalizedOrg.length === 0
+					? repos
+					: repos.filter(
+							(repo) => repo.ownerLogin.toLowerCase() === normalizedOrg,
+						);
+
+			return filteredRepos.slice(0, maxResults).map(toRepoSearchResult);
+		}
+
+		const candidateRepos =
+			userId === null
+				? yield* ctx.db
+						.query("github_repositories")
+						.withIndex("by_ownerLogin_and_name", (q) => q.gte("ownerLogin", ""))
+						.take(GLOBAL_REPO_SEARCH_CANDIDATE_LIMIT)
+				: yield* Effect.gen(function* () {
+						const permissions = yield* ctx.db
+							.query("github_user_repo_permissions")
+							.withIndex("by_userId", (q) => q.eq("userId", userId))
+							.collect();
+
+						const memberRepoIds = new Set<number>();
+						for (const permission of permissions) {
+							if (!hasPullPermission(permission)) continue;
+							memberRepoIds.add(permission.repositoryId);
+						}
+
+						const [memberRepos, connectedRepos] = yield* Effect.all([
+							loadReposByIds([...memberRepoIds]),
+							ctx.db
+								.query("github_repositories")
+								.withIndex("by_connectedByUserId_and_githubUpdatedAt", (q) =>
+									q.eq("connectedByUserId", userId),
+								)
+								.order("desc")
+								.take(GLOBAL_REPO_SEARCH_CANDIDATE_LIMIT),
+						]);
+
+						const reposById = new Map<number, (typeof memberRepos)[number]>();
+						for (const repo of memberRepos) {
+							reposById.set(repo.githubRepoId, repo);
+						}
+						for (const repo of connectedRepos) {
+							reposById.set(repo.githubRepoId, repo);
+						}
+
+						const repos = [...reposById.values()];
+						if (repos.length > 0) return repos;
+
+						const githubLogin = yield* resolveViewerGitHub;
+						if (githubLogin === null) return repos;
+
+						return yield* ctx.db
+							.query("github_repositories")
+							.withIndex("by_ownerLogin_and_name", (q) =>
+								q.eq("ownerLogin", githubLogin),
+							)
+							.take(GLOBAL_REPO_SEARCH_CANDIDATE_LIMIT);
+					});
+
+		const candidateMatches = [];
+		for (const repo of candidateRepos) {
+			if (userId === null && isRepoPrivate(repo)) {
+				continue;
+			}
+
+			if (
+				normalizedOrg.length > 0 &&
+				repo.ownerLogin.toLowerCase() !== normalizedOrg
+			) {
+				continue;
+			}
+
+			const score = repoSearchScore(normalizedQuery, repo);
+			if (score === 0) {
+				continue;
+			}
+
+			candidateMatches.push({ repo, score });
+		}
+
+		candidateMatches.sort((a, b) => {
+			const scoreDelta = b.score - a.score;
+			if (scoreDelta !== 0) return scoreDelta;
+
+			const pushDelta = (b.repo.pushedAt ?? 0) - (a.repo.pushedAt ?? 0);
+			if (pushDelta !== 0) return pushDelta;
+
+			const updateDelta = b.repo.githubUpdatedAt - a.repo.githubUpdatedAt;
+			if (updateDelta !== 0) return updateDelta;
+
+			return a.repo.fullName.localeCompare(b.repo.fullName);
+		});
+
+		return candidateMatches
+			.slice(0, maxResults)
+			.map((match) => toRepoSearchResult(match.repo));
+	}),
+);
+
 listReposDef.implement(() =>
 	Effect.gen(function* () {
 		const repos = yield* selectSidebarAndDashboardRepos;
 
-		const results = [];
-		for (const repo of repos) {
-			const counts = yield* computeRepoCounts(repo.githubRepoId);
+		const ownerAvatarUrlByOwnerId = new Map<number, string | null>();
+		const resolveCachedOwnerAvatarUrl = (ownerId: number) =>
+			Effect.gen(function* () {
+				const cached = ownerAvatarUrlByOwnerId.get(ownerId);
+				if (cached !== undefined) return cached;
 
-			// Resolve owner avatar — check github_users first, then github_organizations
-			const ownerAvatarUrl = yield* resolveOwnerAvatarUrl(repo.ownerId);
-
-			results.push({
-				repositoryId: repo.githubRepoId,
-				fullName: repo.fullName,
-				ownerLogin: repo.ownerLogin,
-				ownerAvatarUrl,
-				name: repo.name,
-				openPrCount: counts.openPrCount,
-				openIssueCount: counts.openIssueCount,
-				failingCheckCount: counts.failingCheckCount,
-				lastPushAt: repo.pushedAt,
-				updatedAt: repo.githubUpdatedAt,
+				const ownerAvatarUrl = yield* resolveOwnerAvatarUrl(ownerId);
+				ownerAvatarUrlByOwnerId.set(ownerId, ownerAvatarUrl);
+				return ownerAvatarUrl;
 			});
-		}
 
-		return results;
+		return yield* Effect.forEach(
+			repos,
+			(repo) =>
+				Effect.gen(function* () {
+					const [counts, ownerAvatarUrl] = yield* Effect.all([
+						computeRepoCounts(repo.githubRepoId),
+						resolveCachedOwnerAvatarUrl(repo.ownerId),
+					]);
+
+					return {
+						repositoryId: repo.githubRepoId,
+						fullName: repo.fullName,
+						ownerLogin: repo.ownerLogin,
+						ownerAvatarUrl,
+						name: repo.name,
+						openPrCount: counts.openPrCount,
+						openIssueCount: counts.openIssueCount,
+						failingCheckCount: counts.failingCheckCount,
+						lastPushAt: repo.pushedAt,
+						updatedAt: repo.githubUpdatedAt,
+					};
+				}),
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
+		);
 	}),
 );
 
@@ -1182,6 +1367,7 @@ listPullRequestsDef.implement((args) =>
 		if (repositoryId === null) return [];
 
 		const ctx = yield* ConfectQueryCtx;
+		const listLimit = Math.min(args.limit ?? 50, 200);
 
 		const state = args.state;
 		const query =
@@ -1199,11 +1385,10 @@ listPullRequestsDef.implement((args) =>
 						)
 						.order("desc");
 
-		// Bounded to prevent unbounded queries on large repos
-		const prs = yield* query.take(200);
+		const prs = yield* query.take(listLimit);
 
 		return yield* Effect.all(prs.map(enrichPr), {
-			concurrency: "unbounded",
+			concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT,
 		});
 	}),
 );
@@ -1245,6 +1430,7 @@ listIssuesDef.implement((args) =>
 		if (repositoryId === null) return [];
 
 		const ctx = yield* ConfectQueryCtx;
+		const listLimit = Math.min(args.limit ?? 50, 200);
 
 		const state = args.state;
 		const query =
@@ -1262,11 +1448,10 @@ listIssuesDef.implement((args) =>
 						)
 						.order("desc");
 
-		// Bounded to prevent unbounded queries on large repos
-		const issues = yield* query.take(200);
+		const issues = yield* query.take(listLimit);
 
 		return yield* Effect.all(issues.map(enrichIssue), {
-			concurrency: "unbounded",
+			concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT,
 		});
 	}),
 );
@@ -1309,7 +1494,7 @@ searchIssuesAndPrsDef.implement((args) =>
 		if (repositoryId === null) return [];
 
 		const ctx = yield* ConfectQueryCtx;
-		const maxResults = args.limit ?? 20;
+		const maxResults = Math.min(args.limit ?? 20, 100);
 		const normalizedTokens = args.query
 			.toLowerCase()
 			.split(" ")
@@ -1392,13 +1577,81 @@ searchIssuesAndPrsDef.implement((args) =>
 		};
 
 		const prCandidates = shouldSearchPrs
-			? yield* ctx.db
-					.query("github_pull_requests")
-					.withIndex("by_repositoryId_and_state_and_githubUpdatedAt", (q) =>
-						q.eq("repositoryId", repositoryId),
-					)
-					.order("desc")
-					.take(400)
+			? yield* Effect.gen(function* () {
+					if (args.state === "merged") {
+						const mergedCandidates = yield* ctx.db
+							.query("github_pull_requests")
+							.withIndex(
+								"by_repositoryId_and_state_and_githubUpdatedAt",
+								(q) =>
+									args.updatedAfter === undefined
+										? q.eq("repositoryId", repositoryId).eq("state", "closed")
+										: q
+												.eq("repositoryId", repositoryId)
+												.eq("state", "closed")
+												.gte("githubUpdatedAt", args.updatedAfter),
+							)
+							.order("desc")
+							.take(SEARCH_CANDIDATE_LIMIT);
+
+						return mergedCandidates.filter((pr) => pr.mergedAt !== null);
+					}
+
+					if (args.state === "open" || args.state === "closed") {
+						const stateFilter = args.state;
+						return yield* ctx.db
+							.query("github_pull_requests")
+							.withIndex(
+								"by_repositoryId_and_state_and_githubUpdatedAt",
+								(q) =>
+									args.updatedAfter === undefined
+										? q
+												.eq("repositoryId", repositoryId)
+												.eq("state", stateFilter)
+										: q
+												.eq("repositoryId", repositoryId)
+												.eq("state", stateFilter)
+												.gte("githubUpdatedAt", args.updatedAfter),
+							)
+							.order("desc")
+							.take(SEARCH_CANDIDATE_LIMIT);
+					}
+
+					const [openCandidates, closedCandidates] = yield* Effect.all([
+						ctx.db
+							.query("github_pull_requests")
+							.withIndex(
+								"by_repositoryId_and_state_and_githubUpdatedAt",
+								(q) =>
+									args.updatedAfter === undefined
+										? q.eq("repositoryId", repositoryId).eq("state", "open")
+										: q
+												.eq("repositoryId", repositoryId)
+												.eq("state", "open")
+												.gte("githubUpdatedAt", args.updatedAfter),
+							)
+							.order("desc")
+							.take(SEARCH_CANDIDATE_LIMIT),
+						ctx.db
+							.query("github_pull_requests")
+							.withIndex(
+								"by_repositoryId_and_state_and_githubUpdatedAt",
+								(q) =>
+									args.updatedAfter === undefined
+										? q.eq("repositoryId", repositoryId).eq("state", "closed")
+										: q
+												.eq("repositoryId", repositoryId)
+												.eq("state", "closed")
+												.gte("githubUpdatedAt", args.updatedAfter),
+							)
+							.order("desc")
+							.take(SEARCH_CANDIDATE_LIMIT),
+					]);
+
+					return [...openCandidates, ...closedCandidates]
+						.sort((a, b) => b.githubUpdatedAt - a.githubUpdatedAt)
+						.slice(0, SEARCH_CANDIDATE_LIMIT);
+				})
 			: [];
 
 		const prItemsWithNulls = yield* Effect.all(
@@ -1428,7 +1681,7 @@ searchIssuesAndPrsDef.implement((args) =>
 						if (pr.assigneeUserIds.length === 0) return null;
 						const assigneeLogins = yield* Effect.all(
 							pr.assigneeUserIds.map((userId) => resolveLoginByUserId(userId)),
-							{ concurrency: "unbounded" },
+							{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 						);
 						const hasMatchingAssignee = assigneeLogins.some(
 							(login) =>
@@ -1455,7 +1708,7 @@ searchIssuesAndPrsDef.implement((args) =>
 					return item;
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 
 		const prItems: Array<{
@@ -1471,13 +1724,66 @@ searchIssuesAndPrsDef.implement((args) =>
 		}
 
 		const issueCandidates = shouldSearchIssues
-			? yield* ctx.db
-					.query("github_issues")
-					.withIndex("by_repositoryId_and_state_and_githubUpdatedAt", (q) =>
-						q.eq("repositoryId", repositoryId),
-					)
-					.order("desc")
-					.take(400)
+			? yield* Effect.gen(function* () {
+					if (args.state === "merged") {
+						return [];
+					}
+
+					if (args.state === "open" || args.state === "closed") {
+						const stateFilter = args.state;
+						return yield* ctx.db
+							.query("github_issues")
+							.withIndex(
+								"by_repositoryId_and_state_and_githubUpdatedAt",
+								(q) =>
+									args.updatedAfter === undefined
+										? q
+												.eq("repositoryId", repositoryId)
+												.eq("state", stateFilter)
+										: q
+												.eq("repositoryId", repositoryId)
+												.eq("state", stateFilter)
+												.gte("githubUpdatedAt", args.updatedAfter),
+							)
+							.order("desc")
+							.take(SEARCH_CANDIDATE_LIMIT);
+					}
+
+					const [openCandidates, closedCandidates] = yield* Effect.all([
+						ctx.db
+							.query("github_issues")
+							.withIndex(
+								"by_repositoryId_and_state_and_githubUpdatedAt",
+								(q) =>
+									args.updatedAfter === undefined
+										? q.eq("repositoryId", repositoryId).eq("state", "open")
+										: q
+												.eq("repositoryId", repositoryId)
+												.eq("state", "open")
+												.gte("githubUpdatedAt", args.updatedAfter),
+							)
+							.order("desc")
+							.take(SEARCH_CANDIDATE_LIMIT),
+						ctx.db
+							.query("github_issues")
+							.withIndex(
+								"by_repositoryId_and_state_and_githubUpdatedAt",
+								(q) =>
+									args.updatedAfter === undefined
+										? q.eq("repositoryId", repositoryId).eq("state", "closed")
+										: q
+												.eq("repositoryId", repositoryId)
+												.eq("state", "closed")
+												.gte("githubUpdatedAt", args.updatedAfter),
+							)
+							.order("desc")
+							.take(SEARCH_CANDIDATE_LIMIT),
+					]);
+
+					return [...openCandidates, ...closedCandidates]
+						.sort((a, b) => b.githubUpdatedAt - a.githubUpdatedAt)
+						.slice(0, SEARCH_CANDIDATE_LIMIT);
+				})
 			: [];
 
 		const issueItemsWithNulls = yield* Effect.all(
@@ -1507,7 +1813,7 @@ searchIssuesAndPrsDef.implement((args) =>
 							issue.assigneeUserIds.map((userId) =>
 								resolveLoginByUserId(userId),
 							),
-							{ concurrency: "unbounded" },
+							{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 						);
 						const hasMatchingAssignee = assigneeLogins.some(
 							(login) =>
@@ -1534,7 +1840,7 @@ searchIssuesAndPrsDef.implement((args) =>
 					return item;
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 
 		const issueItems: Array<{
@@ -1658,11 +1964,11 @@ getHomeDashboardDef.implement((args) =>
 								};
 							}),
 						),
-						{ concurrency: "unbounded" },
+						{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 					);
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 
 		const recentPrs = allPrsByRepo
@@ -1702,11 +2008,11 @@ getHomeDashboardDef.implement((args) =>
 									};
 								}),
 							),
-						{ concurrency: "unbounded" },
+						{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 					);
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 
 		const recentIssues = allIssuesByRepo
@@ -1813,7 +2119,7 @@ getIssueDetailDef.implement((args) =>
 						: null;
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 		const resolvedAssignees = assignees.filter(
 			(a): a is { login: string; avatarUrl: string | null } => a !== null,
@@ -1842,7 +2148,7 @@ getIssueDetailDef.implement((args) =>
 					};
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 
 		return {
@@ -1897,7 +2203,7 @@ getPullRequestDetailDef.implement((args) =>
 						: null;
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 		const resolvedPrAssignees = prAssignees.filter(
 			(a): a is { login: string; avatarUrl: string | null } => a !== null,
@@ -1925,7 +2231,7 @@ getPullRequestDetailDef.implement((args) =>
 					};
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 
 		// Get reviews (bounded — a PR rarely has >200 reviews)
@@ -1951,7 +2257,7 @@ getPullRequestDetailDef.implement((args) =>
 					};
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 
 		// Get review comments (bounded — large PRs can have many inline comments)
@@ -1984,7 +2290,7 @@ getPullRequestDetailDef.implement((args) =>
 					};
 				}),
 			),
-			{ concurrency: "unbounded" },
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
 
 		// Get check runs for this PR's head SHA (bounded)
@@ -2099,7 +2405,7 @@ listPrFilesDef.implement((args) =>
 						.eq("pullRequestNumber", args.number)
 						.eq("headSha", sha),
 				)
-				.collect();
+				.take(PR_FILES_RESULT_LIMIT);
 
 			return {
 				headSha: sha,
@@ -2135,7 +2441,7 @@ listPrFilesDef.implement((args) =>
 					.eq("pullRequestNumber", args.number)
 					.eq("headSha", headSha),
 			)
-			.collect();
+			.take(PR_FILES_RESULT_LIMIT);
 
 		return {
 			headSha,
@@ -2251,7 +2557,7 @@ listPullRequestsPaginatedDef.implement((args) =>
 		const result = yield* query.paginate(paginationOpts);
 
 		const page = yield* Effect.all(result.page.map(enrichPr), {
-			concurrency: "unbounded",
+			concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT,
 		});
 
 		return {
@@ -2298,7 +2604,7 @@ listIssuesPaginatedDef.implement((args) =>
 		const result = yield* query.paginate(paginationOpts);
 
 		const page = yield* Effect.all(result.page.map(enrichIssue), {
-			concurrency: "unbounded",
+			concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT,
 		});
 
 		return {
@@ -2428,7 +2734,7 @@ listWorkflowRunsDef.implement((args) =>
 			.take(200);
 
 		return yield* Effect.all(runs.map(enrichWorkflowRun), {
-			concurrency: "unbounded",
+			concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT,
 		});
 	}),
 );
@@ -2459,7 +2765,7 @@ listWorkflowRunsPaginatedDef.implement((args) =>
 			.paginate(paginationOpts);
 
 		const page = yield* Effect.all(result.page.map(enrichWorkflowRun), {
-			concurrency: "unbounded",
+			concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT,
 		});
 
 		return {
@@ -2543,6 +2849,8 @@ const listRepoLabelsDef = factory
 	})
 	.middleware(ReadGitHubRepoByNameMiddleware);
 
+const REPO_LABEL_SCAN_LIMIT_PER_STATE = 400;
+
 listRepoLabelsDef.implement((args) =>
 	Effect.gen(function* () {
 		const repositoryId = yield* findRepo(args.ownerLogin, args.name);
@@ -2551,13 +2859,38 @@ listRepoLabelsDef.implement((args) =>
 		const ctx = yield* ConfectQueryCtx;
 		const labelSet = new Set<string>();
 
-		// Collect from issues
-		const issues = yield* ctx.db
-			.query("github_issues")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", repositoryId),
-			)
-			.collect();
+		const [openIssues, closedIssues, openPrs, closedPrs] = yield* Effect.all([
+			ctx.db
+				.query("github_issues")
+				.withIndex("by_repositoryId_and_state_and_githubUpdatedAt", (q) =>
+					q.eq("repositoryId", repositoryId).eq("state", "open"),
+				)
+				.order("desc")
+				.take(REPO_LABEL_SCAN_LIMIT_PER_STATE),
+			ctx.db
+				.query("github_issues")
+				.withIndex("by_repositoryId_and_state_and_githubUpdatedAt", (q) =>
+					q.eq("repositoryId", repositoryId).eq("state", "closed"),
+				)
+				.order("desc")
+				.take(REPO_LABEL_SCAN_LIMIT_PER_STATE),
+			ctx.db
+				.query("github_pull_requests")
+				.withIndex("by_repositoryId_and_state_and_githubUpdatedAt", (q) =>
+					q.eq("repositoryId", repositoryId).eq("state", "open"),
+				)
+				.order("desc")
+				.take(REPO_LABEL_SCAN_LIMIT_PER_STATE),
+			ctx.db
+				.query("github_pull_requests")
+				.withIndex("by_repositoryId_and_state_and_githubUpdatedAt", (q) =>
+					q.eq("repositoryId", repositoryId).eq("state", "closed"),
+				)
+				.order("desc")
+				.take(REPO_LABEL_SCAN_LIMIT_PER_STATE),
+		]);
+
+		const issues = [...openIssues, ...closedIssues];
 
 		for (const issue of issues) {
 			for (const label of issue.labelNames) {
@@ -2565,13 +2898,7 @@ listRepoLabelsDef.implement((args) =>
 			}
 		}
 
-		// Collect from PRs
-		const prs = yield* ctx.db
-			.query("github_pull_requests")
-			.withIndex("by_repositoryId_and_number", (q) =>
-				q.eq("repositoryId", repositoryId),
-			)
-			.collect();
+		const prs = [...openPrs, ...closedPrs];
 
 		for (const pr of prs) {
 			if (pr.labelNames) {
@@ -2617,18 +2944,33 @@ listRepoAssigneesDef.implement((args) =>
 			.withIndex("by_repositoryId", (q) => q.eq("repositoryId", repositoryId))
 			.collect();
 
-		// Resolve each to login/avatar
-		const collaborators = yield* Effect.all(
-			permissions.map((perm) =>
-				Effect.gen(function* () {
-					const user = yield* resolveUser(perm.githubUserId);
-					return user.login !== null
-						? { login: user.login, avatarUrl: user.avatarUrl }
-						: null;
-				}),
-			),
-			{ concurrency: "unbounded" },
+		const userIds = [...new Set(permissions.map((perm) => perm.githubUserId))];
+		const users = yield* Effect.forEach(
+			userIds,
+			(userId) =>
+				ctx.db
+					.query("github_users")
+					.withIndex("by_githubUserId", (q) => q.eq("githubUserId", userId))
+					.first(),
+			{ concurrency: QUERY_ENRICH_CONCURRENCY_LIMIT },
 		);
+
+		const userByGitHubId = new Map<
+			number,
+			{ login: string; avatarUrl: string | null }
+		>();
+		for (const userOption of users) {
+			if (Option.isNone(userOption)) continue;
+			userByGitHubId.set(userOption.value.githubUserId, {
+				login: userOption.value.login,
+				avatarUrl: userOption.value.avatarUrl,
+			});
+		}
+
+		const collaborators = permissions.map((perm) => {
+			const user = userByGitHubId.get(perm.githubUserId);
+			return user === undefined ? null : user;
+		});
 
 		return collaborators
 			.filter(
@@ -2645,6 +2987,7 @@ listRepoAssigneesDef.implement((args) =>
 const projectionQueriesModule = makeRpcModule(
 	{
 		listRepos: listReposDef,
+		searchRepos: searchReposDef,
 		getRepoOverview: getRepoOverviewDef,
 		getSyncProgress: getSyncProgressDef,
 		listPullRequests: listPullRequestsDef,
@@ -2670,6 +3013,7 @@ const projectionQueriesModule = makeRpcModule(
 
 export const {
 	listRepos,
+	searchRepos,
 	getRepoOverview,
 	getSyncProgress,
 	listPullRequests,

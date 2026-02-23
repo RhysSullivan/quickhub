@@ -569,6 +569,11 @@ export const confectSchema = defineSchema({
 		.index("by_githubRepoId", ["githubRepoId"])
 		.index("by_installationId_and_fullName", ["installationId", "fullName"])
 		.index("by_ownerLogin_and_name", ["ownerLogin", "name"])
+		.index("by_connectedByUserId_and_githubUpdatedAt", [
+			"connectedByUserId",
+			"githubUpdatedAt",
+		])
+		.index("by_private_and_githubUpdatedAt", ["private", "githubUpdatedAt"])
 		.index("by_installationId_and_githubUpdatedAt", [
 			"installationId",
 			"githubUpdatedAt",

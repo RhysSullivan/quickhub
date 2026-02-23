@@ -523,8 +523,6 @@ const resolveRepositoryIdByNameDef = factory.internalQuery({
 	success: Schema.NullOr(Schema.Number),
 });
 
-const REPOSITORY_LOOKUP_SCAN_LIMIT = 5000;
-
 // ---------------------------------------------------------------------------
 // Implementations
 // ---------------------------------------------------------------------------
@@ -672,37 +670,60 @@ const syncPermissionsForUser = (userId: string) =>
 listConnectedRepoIdsDef.implement(() =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
-		const repos = yield* ctx.db.query("github_repositories").take(2000);
-		return repos.map((repo) => repo.githubRepoId);
+
+		const [publicRepos, privateRepos] = yield* Effect.all([
+			ctx.db
+				.query("github_repositories")
+				.withIndex("by_private_and_githubUpdatedAt", (q) =>
+					q.eq("private", false),
+				)
+				.collect(),
+			ctx.db
+				.query("github_repositories")
+				.withIndex("by_private_and_githubUpdatedAt", (q) =>
+					q.eq("private", true),
+				)
+				.collect(),
+		]);
+
+		return [...publicRepos, ...privateRepos].map((repo) => repo.githubRepoId);
 	}),
 );
 
 resolveRepositoryIdByNameDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
-		const repo = yield* ctx.db
-			.query("github_repositories")
-			.withIndex("by_ownerLogin_and_name", (q) =>
-				q.eq("ownerLogin", args.ownerLogin).eq("name", args.name),
-			)
-			.first();
-
-		if (Option.isSome(repo)) {
-			return repo.value.githubRepoId;
-		}
-
 		const ownerLoginLower = args.ownerLogin.toLowerCase();
 		const nameLower = args.name.toLowerCase();
-		const candidates = yield* ctx.db
-			.query("github_repositories")
-			.take(REPOSITORY_LOOKUP_SCAN_LIMIT);
 
-		for (const candidate of candidates) {
-			if (
-				candidate.ownerLogin.toLowerCase() === ownerLoginLower &&
-				candidate.name.toLowerCase() === nameLower
-			) {
-				return candidate.githubRepoId;
+		const lookupPairs: Array<readonly [string, string]> = [
+			[args.ownerLogin, args.name],
+		];
+		if (ownerLoginLower !== args.ownerLogin || nameLower !== args.name) {
+			lookupPairs.push([ownerLoginLower, nameLower]);
+		}
+		if (ownerLoginLower !== args.ownerLogin) {
+			lookupPairs.push([ownerLoginLower, args.name]);
+		}
+		if (nameLower !== args.name) {
+			lookupPairs.push([args.ownerLogin, nameLower]);
+		}
+
+		const seenPairs = new Set<string>();
+		for (const [ownerLogin, name] of lookupPairs) {
+			const pairKey = `${ownerLogin}\u0000${name}`;
+			if (seenPairs.has(pairKey)) continue;
+			seenPairs.add(pairKey);
+
+			const repo = yield* ctx.db
+				.query("github_repositories")
+				.withIndex("by_ownerLogin_and_name", (q) =>
+					q.eq("ownerLogin", ownerLogin).eq("name", name),
+				)
+				.first();
+
+			if (Option.isSome(repo)) {
+				return repo.value.githubRepoId;
 			}
 		}
 

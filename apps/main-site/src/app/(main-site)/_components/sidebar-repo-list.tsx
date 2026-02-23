@@ -17,12 +17,10 @@ import { Link } from "@packages/ui/components/link";
 import { Skeleton } from "@packages/ui/components/skeleton";
 import { authClient } from "@packages/ui/lib/auth-client";
 import { cn } from "@packages/ui/lib/utils";
-import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Array as Arr, Option, pipe, Record as Rec } from "effect";
 import { useMemo } from "react";
+import { useSharedListReposAtom } from "./shared-projection-subscriptions";
 import type { SidebarRepo } from "./sidebar-client";
-
-const EmptyPayload: Record<string, never> = {};
 
 /**
  * Body content for the homepage / notifications sidebar — grouped repo list.
@@ -39,14 +37,7 @@ export function SidebarRepoList({
 }) {
 	const session = authClient.useSession();
 	const { isReadyForQueries } = useConvexAuthState();
-	const client = useProjectionQueries();
-	const reposAtom = useMemo(
-		() =>
-			client.listRepos.subscription(EmptyPayload, {
-				enabled: isReadyForQueries,
-			}),
-		[client, isReadyForQueries],
-	);
+	const reposAtom = useSharedListReposAtom(isReadyForQueries);
 	const result = useAtomValue(reposAtom);
 
 	// For signed-in users the subscription briefly returns unauthenticated

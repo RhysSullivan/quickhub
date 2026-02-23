@@ -26,13 +26,11 @@ import {
 	PopoverTrigger,
 } from "@packages/ui/components/popover";
 import { cn } from "@packages/ui/lib/utils";
-import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Array as Arr, pipe, Record as Rec } from "effect";
 import { useParams, useSelectedLayoutSegments } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
+import { useSharedListReposAtom } from "./shared-projection-subscriptions";
 import type { SidebarRepo } from "./sidebar-client";
-
-const EmptyPayload: Record<string, never> = {};
 
 /**
  * Known tab segments that map to sidebar tabs.
@@ -87,11 +85,7 @@ export function RepoNavSelector({
 		}
 		return undefined;
 	}, [owner, name, segments]);
-	const client = useProjectionQueries();
-	const reposAtom = useMemo(
-		() => client.listRepos.subscription(EmptyPayload),
-		[client],
-	);
+	const reposAtom = useSharedListReposAtom(true);
 	const repos = useSubscriptionWithInitial(reposAtom, initialRepos);
 
 	const grouped = useMemo(

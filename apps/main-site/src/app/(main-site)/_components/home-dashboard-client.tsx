@@ -24,11 +24,11 @@ import { Skeleton } from "@packages/ui/components/skeleton";
 import { GitHubIcon } from "@packages/ui/icons/index";
 import { authClient } from "@packages/ui/lib/auth-client";
 import { cn } from "@packages/ui/lib/utils";
-import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Option } from "effect";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { triggerOpenSearchCommand } from "./search-command-events";
+import { useSharedHomeDashboardAtom } from "./shared-projection-subscriptions";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -91,18 +91,9 @@ function useDashboardData(
 } {
 	const session = authClient.useSession();
 	const { isReadyForQueries } = useConvexAuthState();
-	const client = useProjectionQueries();
-	const dashboardAtom = useMemo(
-		() =>
-			client.getHomeDashboard.subscription(
-				{
-					ownerLogin: query.ownerLogin,
-				},
-				{
-					enabled: isReadyForQueries,
-				},
-			),
-		[client, query.ownerLogin, isReadyForQueries],
+	const dashboardAtom = useSharedHomeDashboardAtom(
+		query.ownerLogin,
+		isReadyForQueries,
 	);
 	const result = useAtomValue(dashboardAtom);
 	const valueOption = Result.value(result);

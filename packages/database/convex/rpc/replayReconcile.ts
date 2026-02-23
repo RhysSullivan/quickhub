@@ -331,11 +331,9 @@ resolveDeadLetterReposDef.implement(() =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
 
-		// Fetch all dead letters (source field may be missing on older rows,
-		// so we scan all and match by deliveryId pattern instead)
 		const letters = yield* ctx.db
 			.query("github_dead_letters")
-			.withIndex("by_createdAt")
+			.withIndex("by_source_and_createdAt", (q) => q.eq("source", "bootstrap"))
 			.collect();
 
 		// Extract unique repo IDs from bootstrap-style deliveryIds
@@ -381,10 +379,9 @@ purgeDeadLettersByRepoIdsDef.implement((args) =>
 		const ctx = yield* ConfectMutationCtx;
 		const repoIdSet = new Set(args.githubRepoIds);
 
-		// Fetch all dead letters and match by deliveryId pattern
 		const letters = yield* ctx.db
 			.query("github_dead_letters")
-			.withIndex("by_createdAt")
+			.withIndex("by_source_and_createdAt", (q) => q.eq("source", "bootstrap"))
 			.collect();
 
 		const deliveryIdPattern = /^bootstrap-(?:pr|issue):(\d+):page\d+:idx\d+$/;

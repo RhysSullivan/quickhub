@@ -471,10 +471,12 @@ upsertNotificationsDef.implement((args) =>
 		);
 		const allLocal = yield* ctx.db
 			.query("github_notifications")
-			.withIndex("by_userId_and_updatedAt", (q) => q.eq("userId", args.userId))
+			.withIndex("by_userId_and_unread", (q) =>
+				q.eq("userId", args.userId).eq("unread", true),
+			)
 			.collect();
 		for (const local of allLocal) {
-			if (local.unread && !syncedIds.has(local.githubNotificationId)) {
+			if (!syncedIds.has(local.githubNotificationId)) {
 				yield* ctx.db.patch(local._id, {
 					unread: false,
 					lastReadAt: Date.now(),

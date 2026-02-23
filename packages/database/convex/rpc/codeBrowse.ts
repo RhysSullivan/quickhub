@@ -27,6 +27,7 @@ import {
 import { GitHubApiClient } from "../shared/githubApi";
 import { getInstallationToken } from "../shared/githubApp";
 import {
+	evaluateRepoPermissionWithDb,
 	hasRepositoryPermission,
 	RepoPermissionLevelSchema,
 } from "../shared/permissions";
@@ -64,6 +65,12 @@ const FileReadStateItem = Schema.Struct({
 	fileSha: Schema.String,
 	readAt: Schema.Number,
 });
+
+const RepoPermissionDecisionReasonSchema = Schema.Literal(
+	"allowed",
+	"not_authenticated",
+	"insufficient_permission",
+);
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -394,27 +401,39 @@ const findRepositoryByOwnerAndName = (
 	name: string,
 ) =>
 	Effect.gen(function* () {
-		const exactRepo = yield* ctx.db
-			.query("github_repositories")
-			.withIndex("by_ownerLogin_and_name", (q) =>
-				q.eq("ownerLogin", ownerLogin).eq("name", name),
-			)
-			.first();
-
-		if (Option.isSome(exactRepo)) {
-			return exactRepo.value;
-		}
-
 		const normalizedOwnerLogin = ownerLogin.toLowerCase();
 		const normalizedName = name.toLowerCase();
-		const repos = yield* ctx.db.query("github_repositories").collect();
-		const normalizedRepo = repos.find(
-			(repo) =>
-				repo.ownerLogin.toLowerCase() === normalizedOwnerLogin &&
-				repo.name.toLowerCase() === normalizedName,
-		);
 
-		return normalizedRepo ?? null;
+		const lookupPairs: Array<readonly [string, string]> = [[ownerLogin, name]];
+		if (normalizedOwnerLogin !== ownerLogin || normalizedName !== name) {
+			lookupPairs.push([normalizedOwnerLogin, normalizedName]);
+		}
+		if (normalizedOwnerLogin !== ownerLogin) {
+			lookupPairs.push([normalizedOwnerLogin, name]);
+		}
+		if (normalizedName !== name) {
+			lookupPairs.push([ownerLogin, normalizedName]);
+		}
+
+		const seenPairs = new Set<string>();
+		for (const [candidateOwnerLogin, candidateName] of lookupPairs) {
+			const pairKey = `${candidateOwnerLogin}\u0000${candidateName}`;
+			if (seenPairs.has(pairKey)) continue;
+			seenPairs.add(pairKey);
+
+			const repo = yield* ctx.db
+				.query("github_repositories")
+				.withIndex("by_ownerLogin_and_name", (q) =>
+					q.eq("ownerLogin", candidateOwnerLogin).eq("name", candidateName),
+				)
+				.first();
+
+			if (Option.isSome(repo)) {
+				return repo.value;
+			}
+		}
+
+		return null;
 	});
 
 const _resolveRepositoryByOwnerAndName = (
@@ -445,6 +464,9 @@ const getRepoInfoDef = factory.internalQuery({
 	payload: {
 		ownerLogin: Schema.String,
 		name: Schema.String,
+		userId: Schema.optional(Schema.NullOr(Schema.String)),
+		required: Schema.optional(RepoPermissionLevelSchema),
+		requireAuthenticated: Schema.optional(Schema.Boolean),
 	},
 	success: Schema.Struct({
 		found: Schema.Boolean,
@@ -452,12 +474,17 @@ const getRepoInfoDef = factory.internalQuery({
 		connectedByUserId: Schema.optional(Schema.NullOr(Schema.String)),
 		installationId: Schema.optional(Schema.Number),
 		isPrivate: Schema.optional(Schema.Boolean),
+		isAllowed: Schema.optional(Schema.Boolean),
+		permissionReason: Schema.optional(RepoPermissionDecisionReasonSchema),
 	}),
 });
 
 const getRepoInfoByIdDef = factory.internalQuery({
 	payload: {
 		repositoryId: Schema.Number,
+		userId: Schema.optional(Schema.NullOr(Schema.String)),
+		required: Schema.optional(RepoPermissionLevelSchema),
+		requireAuthenticated: Schema.optional(Schema.Boolean),
 	},
 	success: Schema.Struct({
 		found: Schema.Boolean,
@@ -465,6 +492,8 @@ const getRepoInfoByIdDef = factory.internalQuery({
 		name: Schema.optional(Schema.String),
 		installationId: Schema.optional(Schema.Number),
 		isPrivate: Schema.optional(Schema.Boolean),
+		isAllowed: Schema.optional(Schema.Boolean),
+		permissionReason: Schema.optional(RepoPermissionDecisionReasonSchema),
 	}),
 });
 
@@ -499,12 +528,23 @@ getRepoInfoDef.implement((args) =>
 
 		if (repo === null) return { found: false };
 
+		const isPrivate = !(repo.visibility === "public" && repo.private === false);
+		const permission = yield* evaluateRepoPermissionWithDb(ctx.db, {
+			repositoryId: repo.githubRepoId,
+			isPrivate,
+			userId: args.userId ?? null,
+			required: args.required ?? "pull",
+			requireAuthenticated: args.requireAuthenticated,
+		});
+
 		return {
 			found: true,
 			repositoryId: repo.githubRepoId,
 			connectedByUserId: repo.connectedByUserId ?? null,
 			installationId: repo.installationId,
-			isPrivate: !(repo.visibility === "public" && repo.private === false),
+			isPrivate,
+			isAllowed: permission.isAllowed,
+			permissionReason: permission.reason,
 		};
 	}),
 );
@@ -521,14 +561,25 @@ getRepoInfoByIdDef.implement((args) =>
 
 		if (Option.isNone(repo)) return { found: false };
 
+		const isPrivate = !(
+			repo.value.visibility === "public" && repo.value.private === false
+		);
+		const permission = yield* evaluateRepoPermissionWithDb(ctx.db, {
+			repositoryId: repo.value.githubRepoId,
+			isPrivate,
+			userId: args.userId ?? null,
+			required: args.required ?? "pull",
+			requireAuthenticated: args.requireAuthenticated,
+		});
+
 		return {
 			found: true,
 			ownerLogin: repo.value.ownerLogin,
 			name: repo.value.name,
 			installationId: repo.value.installationId,
-			isPrivate: !(
-				repo.value.visibility === "public" && repo.value.private === false
-			),
+			isPrivate,
+			isAllowed: permission.isAllowed,
+			permissionReason: permission.reason,
 		};
 	}),
 );

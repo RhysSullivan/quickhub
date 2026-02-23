@@ -203,7 +203,10 @@ const countWebhookEventsByState = (
 healthCheckDef.implement((_args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
-		const repos = yield* ctx.db.query("github_repositories").take(1);
+		const repos = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_githubRepoId", (q) => q.gte("githubRepoId", 0))
+			.take(1);
 		return {
 			ok: true,
 			tableCount: repos.length,
@@ -220,12 +223,30 @@ tableCountsDef.implement((_args) =>
 		const cap = WEBHOOK_COUNT_CAP;
 		const count = (items: Array<unknown>) => Math.min(items.length, 10000);
 
-		const repositories = yield* ctx.db.query("github_repositories").take(cap);
-		const branches = yield* ctx.db.query("github_branches").take(cap);
-		const commits = yield* ctx.db.query("github_commits").take(cap);
-		const users = yield* ctx.db.query("github_users").take(cap);
-		const syncJobs = yield* ctx.db.query("github_sync_jobs").take(cap);
-		const installations = yield* ctx.db.query("github_installations").take(cap);
+		const repositories = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_githubRepoId", (q) => q.gte("githubRepoId", 0))
+			.take(cap);
+		const branches = yield* ctx.db
+			.query("github_branches")
+			.withIndex("by_repositoryId_and_name", (q) => q.gte("repositoryId", 0))
+			.take(cap);
+		const commits = yield* ctx.db
+			.query("github_commits")
+			.withIndex("by_repositoryId_and_sha", (q) => q.gte("repositoryId", 0))
+			.take(cap);
+		const users = yield* ctx.db
+			.query("github_users")
+			.withIndex("by_githubUserId", (q) => q.gte("githubUserId", 0))
+			.take(cap);
+		const syncJobs = yield* ctx.db
+			.query("github_sync_jobs")
+			.withIndex("by_lockKey", (q) => q.gte("lockKey", ""))
+			.take(cap);
+		const installations = yield* ctx.db
+			.query("github_installations")
+			.withIndex("by_installationId", (q) => q.gte("installationId", 0))
+			.take(cap);
 
 		// Unbounded tables — O(log n) aggregate counts.
 		// These aggregates are namespaced, so we iterate repos to sum totals.
@@ -236,9 +257,6 @@ tableCountsDef.implement((_args) =>
 		let pullRequestsTotal = 0;
 		let issuesTotal = 0;
 		let checkRunsTotal = 0;
-		const _issueCommentsTotal = 0;
-		const _pullRequestReviewsTotal = 0;
-		const _workflowJobsTotal = 0;
 
 		for (const repoId of repoIds) {
 			const [prCount, issueCount, checkRunCount] = yield* Effect.promise(() =>
@@ -253,16 +271,20 @@ tableCountsDef.implement((_args) =>
 			checkRunsTotal += checkRunCount;
 		}
 
-		// Comments, reviews, and jobs are namespaced by compound keys.
-		// Summing across all namespaces isn't practical without listing them.
-		// For these, we fall back to bounded .take() since they grow proportionally
-		// to their parent entities which are already counted via aggregates.
 		const issueCommentsDocs = yield* ctx.db
 			.query("github_issue_comments")
+			.withIndex("by_repositoryId_and_issueNumber", (q) =>
+				q.gte("repositoryId", 0),
+			)
 			.take(cap);
 		const pullRequestReviewsDocs = yield* ctx.db
 			.query("github_pull_request_reviews")
+			.withIndex("by_repositoryId_and_pullRequestNumber", (q) =>
+				q.gte("repositoryId", 0),
+			)
 			.take(cap);
+		const issueCommentsTotal = count(issueCommentsDocs);
+		const pullRequestReviewsTotal = count(pullRequestReviewsDocs);
 
 		const [webhookPending, webhookProcessed, webhookRetry, webhookFailed] =
 			yield* Effect.all([
@@ -277,9 +299,9 @@ tableCountsDef.implement((_args) =>
 			branches: count(branches),
 			commits: count(commits),
 			pullRequests: pullRequestsTotal,
-			pullRequestReviews: count(pullRequestReviewsDocs),
+			pullRequestReviews: pullRequestReviewsTotal,
 			issues: issuesTotal,
-			issueComments: count(issueCommentsDocs),
+			issueComments: issueCommentsTotal,
 			checkRuns: checkRunsTotal,
 			users: count(users),
 			syncJobs: count(syncJobs),
@@ -293,7 +315,10 @@ tableCountsDef.implement((_args) =>
 syncJobStatusDef.implement((_args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectQueryCtx;
-		const jobs = yield* ctx.db.query("github_sync_jobs").collect();
+		const jobs = yield* ctx.db
+			.query("github_sync_jobs")
+			.withIndex("by_lockKey", (q) => q.gte("lockKey", ""))
+			.collect();
 		return jobs.map((j) => ({
 			lockKey: j.lockKey,
 			state: j.state,
@@ -343,6 +368,7 @@ queueHealthDef.implement(() =>
 		// Dead letters are a separate table, typically small
 		const deadLetters = yield* ctx.db
 			.query("github_dead_letters")
+			.withIndex("by_createdAt")
 			.take(WEBHOOK_COUNT_CAP)
 			.pipe(Effect.map((items) => Math.min(items.length, 10000)));
 
@@ -371,6 +397,7 @@ systemStatusDef.implement((_args) =>
 
 		const deadLetterItems = yield* ctx.db
 			.query("github_dead_letters")
+			.withIndex("by_createdAt")
 			.take(cap);
 
 		// Recent processed in last hour — still needs index range query
@@ -410,13 +437,29 @@ systemStatusDef.implement((_args) =>
 			.take(cap);
 
 		// -- Write operations summary (optimistic domain rows) --
-		const optimisticIssues = yield* ctx.db.query("github_issues").take(cap);
+		const optimisticIssues = yield* ctx.db
+			.query("github_issues")
+			.withIndex("by_optimisticCorrelationId", (q) =>
+				q.gte("optimisticCorrelationId", null),
+			)
+			.take(cap);
 		const optimisticComments = yield* ctx.db
 			.query("github_issue_comments")
+			.withIndex("by_optimisticCorrelationId", (q) =>
+				q.gte("optimisticCorrelationId", null),
+			)
 			.take(cap);
-		const optimisticPrs = yield* ctx.db.query("github_pull_requests").take(cap);
+		const optimisticPrs = yield* ctx.db
+			.query("github_pull_requests")
+			.withIndex("by_optimisticCorrelationId", (q) =>
+				q.gte("optimisticCorrelationId", null),
+			)
+			.take(cap);
 		const optimisticReviews = yield* ctx.db
 			.query("github_pull_request_reviews")
+			.withIndex("by_optimisticCorrelationId", (q) =>
+				q.gte("optimisticCorrelationId", null),
+			)
 			.take(cap);
 
 		const optimisticStates = [
@@ -446,7 +489,10 @@ systemStatusDef.implement((_args) =>
 		).length;
 
 		// -- Projection staleness (materialized views removed) --
-		const repos = yield* ctx.db.query("github_repositories").take(cap);
+		const repos = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_githubRepoId", (q) => q.gte("githubRepoId", 0))
+			.take(cap);
 
 		return {
 			queue: {
@@ -1278,7 +1324,10 @@ listInstallationsForResyncDef.implement((args) =>
 		}
 
 		// All installations with a real installationId (not placeholder 0)
-		const all = yield* ctx.db.query("github_installations").collect();
+		const all = yield* ctx.db
+			.query("github_installations")
+			.withIndex("by_installationId", (q) => q.gte("installationId", 0))
+			.collect();
 		return Arr.filter(
 			all,
 			(i) => i.installationId > 0 && i.suspendedAt === null,
@@ -1455,13 +1504,23 @@ dashboardSnapshotDef.implement(() =>
 			countWebhookEventsByState(ctx, "failed"),
 		]);
 
-		const deadLetters = yield* ctx.db.query("github_dead_letters").take(cap);
+		const deadLetters = yield* ctx.db
+			.query("github_dead_letters")
+			.withIndex("by_createdAt")
+			.take(cap);
 		const deadLetterCount = Math.min(deadLetters.length, 10_000);
 
-		const repositories = yield* ctx.db.query("github_repositories").take(cap);
-		const syncJobs = yield* ctx.db.query("github_sync_jobs").take(cap);
+		const repositories = yield* ctx.db
+			.query("github_repositories")
+			.withIndex("by_githubRepoId", (q) => q.gte("githubRepoId", 0))
+			.take(cap);
+		const syncJobs = yield* ctx.db
+			.query("github_sync_jobs")
+			.withIndex("by_lockKey", (q) => q.gte("lockKey", ""))
+			.take(cap);
 		const allInstallations = yield* ctx.db
 			.query("github_installations")
+			.withIndex("by_installationId", (q) => q.gte("installationId", 0))
 			.collect();
 
 		const installations = Arr.filter(

@@ -2240,6 +2240,7 @@ getQueueHealthDef.implement(() =>
 
 		const deadLetters = yield* ctx.db
 			.query("github_dead_letters")
+			.withIndex("by_createdAt")
 			.take(10001)
 			.pipe(Effect.map((items) => Math.min(items.length, 10000)));
 

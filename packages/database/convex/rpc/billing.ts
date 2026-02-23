@@ -15,6 +15,7 @@ import { AuthenticatedUser, RequireAuthenticatedMiddleware } from "./security";
 
 const factory = createRpcFactory({ schema: confectSchema });
 const FREE_ORG_STAR_THRESHOLD = 1000;
+const PERMISSION_QUERY_CONCURRENCY_LIMIT = 12;
 
 const OwnerSeatSnapshot = Schema.Struct({
 	ownerLogin: Schema.String,
@@ -120,7 +121,7 @@ getOwnerSeatSnapshotDef.implement((args) =>
 			.withIndex("by_ownerLogin_and_name", (q) =>
 				q.eq("ownerLogin", args.ownerLogin),
 			)
-			.take(500);
+			.collect();
 
 		if (repos.length === 0) {
 			return {
@@ -168,14 +169,19 @@ getOwnerSeatSnapshotDef.implement((args) =>
 		);
 
 		const seatUserIds = new Set<string>();
-		for (const repo of repos) {
-			const permissions = yield* ctx.db
-				.query("github_user_repo_permissions")
-				.withIndex("by_repositoryId", (q) =>
-					q.eq("repositoryId", repo.githubRepoId),
-				)
-				.collect();
+		const permissionsByRepo = yield* Effect.forEach(
+			repos,
+			(repo) =>
+				ctx.db
+					.query("github_user_repo_permissions")
+					.withIndex("by_repositoryId", (q) =>
+						q.eq("repositoryId", repo.githubRepoId),
+					)
+					.collect(),
+			{ concurrency: PERMISSION_QUERY_CONCURRENCY_LIMIT },
+		);
 
+		for (const permissions of permissionsByRepo) {
 			for (const permission of permissions) {
 				if (!ownerHasPermission(permission)) continue;
 				seatUserIds.add(permission.userId);

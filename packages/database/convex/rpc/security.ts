@@ -29,6 +29,10 @@ const RepoInfoByNameSchema = Schema.Struct({
 	repositoryId: Schema.optional(Schema.Number),
 	installationId: Schema.optional(Schema.Number),
 	isPrivate: Schema.optional(Schema.Boolean),
+	isAllowed: Schema.optional(Schema.Boolean),
+	permissionReason: Schema.optional(
+		Schema.Literal("allowed", "not_authenticated", "insufficient_permission"),
+	),
 });
 
 const RepoInfoByIdSchema = Schema.Struct({
@@ -37,6 +41,10 @@ const RepoInfoByIdSchema = Schema.Struct({
 	name: Schema.optional(Schema.String),
 	installationId: Schema.optional(Schema.Number),
 	isPrivate: Schema.optional(Schema.Boolean),
+	isAllowed: Schema.optional(Schema.Boolean),
+	permissionReason: Schema.optional(
+		Schema.Literal("allowed", "not_authenticated", "insufficient_permission"),
+	),
 });
 
 const RepoInfoByNameSuccessResponseSchema = Schema.Struct({
@@ -49,11 +57,6 @@ const RepoInfoByIdSuccessResponseSchema = Schema.Struct({
 	value: RepoInfoByIdSchema,
 });
 
-const BooleanSuccessResponseSchema = Schema.Struct({
-	_tag: Schema.Literal("Success"),
-	value: Schema.Boolean,
-});
-
 const RepoInfoByNameResponseSchema = Schema.Union(
 	RepoInfoByNameSchema,
 	RepoInfoByNameSuccessResponseSchema,
@@ -62,11 +65,6 @@ const RepoInfoByNameResponseSchema = Schema.Union(
 const RepoInfoByIdResponseSchema = Schema.Union(
 	RepoInfoByIdSchema,
 	RepoInfoByIdSuccessResponseSchema,
-);
-
-const BooleanResponseSchema = Schema.Union(
-	Schema.Boolean,
-	BooleanSuccessResponseSchema,
 );
 
 const decodeRepoByIdPayload = Schema.decodeUnknownEither(RepoByIdPayloadSchema);
@@ -82,7 +80,6 @@ const decodeRepoInfoByNameResponse = Schema.decodeUnknownEither(
 const decodeRepoInfoByIdResponse = Schema.decodeUnknownEither(
 	RepoInfoByIdResponseSchema,
 );
-const decodeBooleanResponse = Schema.decodeUnknownEither(BooleanResponseSchema);
 
 const isRepoInfoByNameSuccessResponse = Schema.is(
 	RepoInfoByNameSuccessResponseSchema,
@@ -90,7 +87,6 @@ const isRepoInfoByNameSuccessResponse = Schema.is(
 const isRepoInfoByIdSuccessResponse = Schema.is(
 	RepoInfoByIdSuccessResponseSchema,
 );
-const isBooleanSuccessResponse = Schema.is(BooleanSuccessResponseSchema);
 
 const unwrapRepoInfoByNameResponse = (
 	response: Schema.Schema.Type<typeof RepoInfoByNameResponseSchema>,
@@ -106,16 +102,6 @@ const unwrapRepoInfoByIdResponse = (
 	response: Schema.Schema.Type<typeof RepoInfoByIdResponseSchema>,
 ): Schema.Schema.Type<typeof RepoInfoByIdSchema> => {
 	if (isRepoInfoByIdSuccessResponse(response)) {
-		return response.value;
-	}
-
-	return response;
-};
-
-const unwrapBooleanResponse = (
-	response: Schema.Schema.Type<typeof BooleanResponseSchema>,
-): boolean => {
-	if (isBooleanSuccessResponse(response)) {
 		return response.value;
 	}
 
@@ -250,51 +236,17 @@ const resolveIdentityUserId = (options: MiddlewareOptions) =>
 		return parseUserId(identity);
 	});
 
-const ensureRepoPermission = (
-	options: MiddlewareOptions,
-	repositoryId: number,
-	isPrivate: boolean,
-	required: RepoPermissionLevel,
+const permissionFailureReason = (
+	permissionReason:
+		| "allowed"
+		| "not_authenticated"
+		| "insufficient_permission"
+		| undefined,
 	userId: string | null,
-	requireAuthenticated: boolean,
-	ownerLogin: string | null,
-	name: string | null,
-): Effect.Effect<boolean, RepoAccessViolation> =>
-	Effect.gen(function* () {
-		const hasPermissionRaw = yield* Effect.promise(() =>
-			options.ctx.runQuery(internal.rpc.codeBrowse.hasRepoPermission, {
-				repositoryId,
-				isPrivate,
-				userId,
-				required,
-				requireAuthenticated,
-			}),
-		).pipe(Effect.orDie);
-
-		const hasPermission = decodeBooleanResponse(hasPermissionRaw);
-		if (
-			Either.isLeft(hasPermission) ||
-			!unwrapBooleanResponse(hasPermission.right)
-		) {
-			return yield* Effect.die(
-				new RepoAccessViolation({
-					reason:
-						userId === null ? "not_authenticated" : "insufficient_permission",
-					message:
-						userId === null
-							? "Authentication is required"
-							: `Missing required repository permission: ${required}`,
-					repositoryId,
-					ownerLogin,
-					name,
-					required,
-					userId,
-				}),
-			);
-		}
-
-		return true;
-	});
+): "not_authenticated" | "insufficient_permission" =>
+	permissionReason === "not_authenticated" || userId === null
+		? "not_authenticated"
+		: "insufficient_permission";
 
 const authorizeRepoById = (
 	options: MiddlewareOptions,
@@ -318,9 +270,13 @@ const authorizeRepoById = (
 		}
 
 		const repositoryId = decodedPayload.right.repositoryId;
+		const userId = yield* resolveIdentityUserId(options);
 		const repoInfoRaw = yield* Effect.promise(() =>
 			options.ctx.runQuery(internal.rpc.codeBrowse.getRepoInfoById, {
 				repositoryId,
+				userId,
+				required,
+				requireAuthenticated,
 			}),
 		).pipe(Effect.orDie);
 
@@ -370,32 +326,24 @@ const authorizeRepoById = (
 			);
 		}
 
-		const userId = yield* resolveIdentityUserId(options);
-		if (requireAuthenticated && userId === null) {
+		const isPrivate = repoInfo.isPrivate ?? true;
+		if (repoInfo.isAllowed !== true) {
+			const reason = permissionFailureReason(repoInfo.permissionReason, userId);
 			return yield* Effect.die(
 				new RepoAccessViolation({
-					reason: "not_authenticated",
-					message: "Authentication is required",
+					reason,
+					message:
+						reason === "not_authenticated"
+							? "Authentication is required"
+							: `Missing required repository permission: ${required}`,
 					repositoryId,
 					ownerLogin,
 					name,
 					required,
-					userId: null,
+					userId,
 				}),
 			);
 		}
-
-		const isPrivate = repoInfo.isPrivate ?? true;
-		yield* ensureRepoPermission(
-			options,
-			repositoryId,
-			isPrivate,
-			required,
-			userId,
-			requireAuthenticated,
-			ownerLogin,
-			name,
-		);
 
 		return {
 			repositoryId,
@@ -431,11 +379,15 @@ const authorizeRepoByName = (
 
 		const ownerLogin = decodedPayload.right.ownerLogin;
 		const name = decodedPayload.right.name;
+		const userId = yield* resolveIdentityUserId(options);
 
 		const repoInfoRaw = yield* Effect.promise(() =>
 			options.ctx.runQuery(internal.rpc.codeBrowse.getRepoInfo, {
 				ownerLogin,
 				name,
+				userId,
+				required,
+				requireAuthenticated,
 			}),
 		).pipe(Effect.orDie);
 
@@ -484,32 +436,24 @@ const authorizeRepoByName = (
 			);
 		}
 
-		const userId = yield* resolveIdentityUserId(options);
-		if (requireAuthenticated && userId === null) {
+		const isPrivate = repoInfo.isPrivate ?? true;
+		if (repoInfo.isAllowed !== true) {
+			const reason = permissionFailureReason(repoInfo.permissionReason, userId);
 			return yield* Effect.die(
 				new RepoAccessViolation({
-					reason: "not_authenticated",
-					message: "Authentication is required",
+					reason,
+					message:
+						reason === "not_authenticated"
+							? "Authentication is required"
+							: `Missing required repository permission: ${required}`,
 					repositoryId,
 					ownerLogin,
 					name,
 					required,
-					userId: null,
+					userId,
 				}),
 			);
 		}
-
-		const isPrivate = repoInfo.isPrivate ?? true;
-		yield* ensureRepoPermission(
-			options,
-			repositoryId,
-			isPrivate,
-			required,
-			userId,
-			requireAuthenticated,
-			ownerLogin,
-			name,
-		);
 
 		return {
 			repositoryId,
@@ -536,31 +480,6 @@ const buildRepoSummaryByName = (
 	isPrivate,
 });
 
-const checkReadPermission = (
-	options: MiddlewareOptions,
-	repositoryId: number,
-	isPrivate: boolean,
-	userId: string | null,
-) =>
-	Effect.gen(function* () {
-		const hasPermissionRaw = yield* Effect.promise(() =>
-			options.ctx.runQuery(internal.rpc.codeBrowse.hasRepoPermission, {
-				repositoryId,
-				isPrivate,
-				userId,
-				required: "pull",
-				requireAuthenticated: false,
-			}),
-		).pipe(Effect.orDie);
-
-		const hasPermission = decodeBooleanResponse(hasPermissionRaw);
-		if (Either.isLeft(hasPermission)) {
-			return false;
-		}
-
-		return unwrapBooleanResponse(hasPermission.right);
-	});
-
 const authorizeReadRepoByName = (
 	options: MiddlewareOptions,
 ): Effect.Effect<ReadGitHubRepoPermissionValue> =>
@@ -583,6 +502,9 @@ const authorizeReadRepoByName = (
 			options.ctx.runQuery(internal.rpc.codeBrowse.getRepoInfo, {
 				ownerLogin,
 				name,
+				userId,
+				required: "pull",
+				requireAuthenticated: false,
 			}),
 		).pipe(Effect.orDie);
 
@@ -625,18 +547,10 @@ const authorizeReadRepoByName = (
 			isPrivate,
 		);
 
-		const hasPermission = yield* checkReadPermission(
-			options,
-			repositoryId,
-			isPrivate,
-			userId,
-		);
-
-		if (!hasPermission) {
+		if (repoInfo.isAllowed !== true) {
 			return {
 				isAllowed: false,
-				reason:
-					userId === null ? "not_authenticated" : "insufficient_permission",
+				reason: permissionFailureReason(repoInfo.permissionReason, userId),
 				userId,
 				repository,
 			};
@@ -670,6 +584,9 @@ const authorizeReadRepoById = (
 		const repoInfoRaw = yield* Effect.promise(() =>
 			options.ctx.runQuery(internal.rpc.codeBrowse.getRepoInfoById, {
 				repositoryId,
+				userId,
+				required: "pull",
+				requireAuthenticated: false,
 			}),
 		).pipe(Effect.orDie);
 
@@ -713,18 +630,10 @@ const authorizeReadRepoById = (
 			isPrivate,
 		);
 
-		const hasPermission = yield* checkReadPermission(
-			options,
-			repositoryId,
-			isPrivate,
-			userId,
-		);
-
-		if (!hasPermission) {
+		if (repoInfo.isAllowed !== true) {
 			return {
 				isAllowed: false,
-				reason:
-					userId === null ? "not_authenticated" : "insufficient_permission",
+				reason: permissionFailureReason(repoInfo.permissionReason, userId),
 				userId,
 				repository,
 			};
