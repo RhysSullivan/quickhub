@@ -73,9 +73,9 @@ async function RepoDetailShell({
 		<SyncProgressOverlay owner={owner} name={name}>
 			<div className="h-full overflow-y-auto">
 				<div className="px-6 py-8">
-					{header}
-					{prs}
-					{issues}
+					<div key="header">{header}</div>
+					<div key="prs">{prs}</div>
+					<div key="issues">{issues}</div>
 				</div>
 			</div>
 		</SyncProgressOverlay>
