@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { type ReactNode, Suspense } from "react";
 import { HubShell } from "./_components/hub-shell";
 import { MainSiteSidebar } from "./_components/main-site-sidebar";
+import { SidebarSkeleton } from "./_components/sidebar-client";
 
 export const metadata: Metadata = {
 	title: "FasterGH — GitHub Mirror",
@@ -26,7 +27,11 @@ export default function MainSiteLayout({ children }: { children: ReactNode }) {
 	return (
 		<Providers>
 			<HubShell
-				sidebar={<MainSiteSidebar />}
+				sidebar={
+					<Suspense fallback={<SidebarSkeleton />}>
+						<MainSiteSidebar />
+					</Suspense>
+				}
 				detail={
 					<Suspense fallback={<DetailShellFallback />}>{children}</Suspense>
 				}
