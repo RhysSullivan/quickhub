@@ -603,11 +603,11 @@ function PrRow({ pr }: { pr: DashboardPrItem }) {
 	return (
 		<Link
 			href={`/${pr.ownerLogin}/${pr.repoName}/pull/${pr.number}`}
-			className="flex items-center gap-2.5 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
+			className="flex items-start gap-2.5 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
 		>
 			<PrStateIcon state={pr.state} draft={pr.draft} />
 			<div className="min-w-0 flex-1">
-				<p className="truncate text-[13px] font-medium text-foreground leading-tight">
+				<p className="text-[13px] font-medium text-foreground leading-tight">
 					{pr.title}
 				</p>
 				<div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground/60">
@@ -654,7 +654,7 @@ function IssueRow({ issue }: { issue: DashboardIssueItem }) {
 	return (
 		<Link
 			href={`/${issue.ownerLogin}/${issue.repoName}/issues/${issue.number}`}
-			className="flex items-center gap-2.5 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
+			className="flex items-start gap-2.5 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
 		>
 			<CircleDot
 				className={cn(
@@ -663,7 +663,7 @@ function IssueRow({ issue }: { issue: DashboardIssueItem }) {
 				)}
 			/>
 			<div className="min-w-0 flex-1">
-				<p className="truncate text-[13px] font-medium text-foreground leading-tight">
+				<p className="text-[13px] font-medium leading-tight text-foreground">
 					{issue.title}
 				</p>
 				<div className="mt-0.5 flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground/60">
@@ -706,10 +706,10 @@ function RepoRow({ repo }: { repo: RepoSummary }) {
 	return (
 		<Link
 			href={`/${repo.ownerLogin}/${repo.name}`}
-			className="flex items-center justify-between gap-2 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
+			className="flex items-start justify-between gap-2 border-b border-border/30 px-3 py-2 no-underline transition-colors hover:bg-accent/50 last:border-b-0"
 		>
 			<div className="min-w-0 flex-1">
-				<p className="truncate text-[13px] font-medium text-foreground leading-tight">
+				<p className="text-[13px] font-medium text-foreground leading-tight">
 					{repo.fullName}
 				</p>
 				{repo.lastPushAt !== null && (
