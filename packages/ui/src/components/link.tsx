@@ -224,7 +224,7 @@ function InternalLink({
 
 	if (isQuickHubSpaNavigationEnabled()) {
 		const discoverBehavior: DiscoverBehavior = "render";
-		const prefetchBehavior: PrefetchBehavior = "render";
+		const prefetchBehavior: PrefetchBehavior = isTouch ? "viewport" : "intent";
 
 		const routerLinkProps = {
 			...routerSafeRest,
