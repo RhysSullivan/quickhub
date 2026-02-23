@@ -26,11 +26,11 @@ export function RepoTabBar({
 }) {
 	return (
 		<div className="shrink-0 border-b border-sidebar-border">
-			<div className="flex px-0.5 mt-0.5">
+			<div className="flex px-1 mt-0.5">
 				<Link
 					href={`/${owner}/${name}/pulls`}
 					className={cn(
-						"flex items-center gap-1 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
+						"flex h-6 items-center gap-1 px-2 text-[10px] font-medium border-b-2 -mb-px transition-colors no-underline",
 						activeTab === "pulls"
 							? "border-foreground text-foreground"
 							: "border-transparent text-muted-foreground hover:text-foreground",
@@ -43,7 +43,7 @@ export function RepoTabBar({
 				<Link
 					href={`/${owner}/${name}/issues`}
 					className={cn(
-						"flex items-center gap-1 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
+						"flex h-6 items-center gap-1 px-2 text-[10px] font-medium border-b-2 -mb-px transition-colors no-underline",
 						activeTab === "issues"
 							? "border-foreground text-foreground"
 							: "border-transparent text-muted-foreground hover:text-foreground",
@@ -56,7 +56,7 @@ export function RepoTabBar({
 				<Link
 					href={`/${owner}/${name}/actions`}
 					className={cn(
-						"flex items-center gap-1 px-1.5 py-1 text-[10px] font-semibold border-b-2 -mb-px transition-colors no-underline",
+						"flex h-6 items-center gap-1 px-2 text-[10px] font-medium border-b-2 -mb-px transition-colors no-underline",
 						activeTab === "actions"
 							? "border-foreground text-foreground"
 							: "border-transparent text-muted-foreground hover:text-foreground",
