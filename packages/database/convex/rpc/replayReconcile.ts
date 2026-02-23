@@ -97,6 +97,36 @@ const reconcileRepoDef = factory.internalMutation({
 	}),
 });
 
+/**
+ * Resolve dead letter repo IDs to repo names.
+ * Scans dead letters with source "bootstrap", extracts repo IDs from deliveryIds,
+ * and looks up the corresponding repo ownerLogin/name pairs.
+ */
+const resolveDeadLetterReposDef = factory.internalQuery({
+	success: Schema.Array(
+		Schema.Struct({
+			githubRepoId: Schema.Number,
+			ownerLogin: Schema.String,
+			name: Schema.String,
+			deadLetterCount: Schema.Number,
+		}),
+	),
+});
+
+/**
+ * Purge dead letters for specific GitHub repo IDs.
+ * Deletes dead letters whose deliveryId matches `bootstrap-pr:<repoId>:*`
+ * or `bootstrap-issue:<repoId>:*` for the given repo IDs.
+ */
+const purgeDeadLettersByRepoIdsDef = factory.internalMutation({
+	payload: {
+		githubRepoIds: Schema.Array(Schema.Number),
+	},
+	success: Schema.Struct({
+		deleted: Schema.Number,
+	}),
+});
+
 // ---------------------------------------------------------------------------
 // Implementations
 // ---------------------------------------------------------------------------
@@ -295,6 +325,80 @@ reconcileRepoDef.implement((args) =>
 	}),
 );
 
+resolveDeadLetterReposDef.implement(() =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectQueryCtx;
+
+		// Fetch all dead letters (source field may be missing on older rows,
+		// so we scan all and match by deliveryId pattern instead)
+		const letters = yield* ctx.db
+			.query("github_dead_letters")
+			.withIndex("by_createdAt")
+			.collect();
+
+		// Extract unique repo IDs from bootstrap-style deliveryIds
+		const repoIdCounts = new Map<number, number>();
+		const deliveryIdPattern = /^bootstrap-(?:pr|issue):(\d+):page\d+:idx\d+$/;
+		for (const letter of letters) {
+			const match = deliveryIdPattern.exec(letter.deliveryId);
+			if (match) {
+				const repoId = Number(match[1]);
+				repoIdCounts.set(repoId, (repoIdCounts.get(repoId) ?? 0) + 1);
+			}
+		}
+
+		// Look up repo names
+		const results: Array<{
+			githubRepoId: number;
+			ownerLogin: string;
+			name: string;
+			deadLetterCount: number;
+		}> = [];
+		for (const [repoId, count] of repoIdCounts) {
+			const repo = yield* ctx.db
+				.query("github_repositories")
+				.withIndex("by_githubRepoId", (q) => q.eq("githubRepoId", repoId))
+				.first();
+
+			if (Option.isSome(repo)) {
+				results.push({
+					githubRepoId: repoId,
+					ownerLogin: repo.value.ownerLogin,
+					name: repo.value.name,
+					deadLetterCount: count,
+				});
+			}
+		}
+
+		return results;
+	}),
+);
+
+purgeDeadLettersByRepoIdsDef.implement((args) =>
+	Effect.gen(function* () {
+		const ctx = yield* ConfectMutationCtx;
+		const repoIdSet = new Set(args.githubRepoIds);
+
+		// Fetch all dead letters and match by deliveryId pattern
+		const letters = yield* ctx.db
+			.query("github_dead_letters")
+			.withIndex("by_createdAt")
+			.collect();
+
+		const deliveryIdPattern = /^bootstrap-(?:pr|issue):(\d+):page\d+:idx\d+$/;
+		let deleted = 0;
+		for (const letter of letters) {
+			const match = deliveryIdPattern.exec(letter.deliveryId);
+			if (match && repoIdSet.has(Number(match[1]))) {
+				yield* ctx.db.delete(letter._id);
+				deleted++;
+			}
+		}
+
+		return { deleted };
+	}),
+);
+
 // ---------------------------------------------------------------------------
 // Module
 // ---------------------------------------------------------------------------
@@ -307,6 +411,8 @@ const replayReconcileModule = makeRpcModule(
 		listFailedEvents: listFailedEventsDef,
 		listDeadLetters: listDeadLettersDef,
 		reconcileRepo: reconcileRepoDef,
+		resolveDeadLetterRepos: resolveDeadLetterReposDef,
+		purgeDeadLettersByRepoIds: purgeDeadLettersByRepoIdsDef,
 	},
 	{ middlewares: DatabaseRpcModuleMiddlewares },
 );
@@ -318,6 +424,8 @@ export const {
 	listFailedEvents,
 	listDeadLetters,
 	reconcileRepo,
+	resolveDeadLetterRepos,
+	purgeDeadLettersByRepoIds,
 } = replayReconcileModule.handlers;
 export { replayReconcileModule };
 export type ReplayReconcileModule = typeof replayReconcileModule;

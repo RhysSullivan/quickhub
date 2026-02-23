@@ -50,14 +50,16 @@ export function SidebarRepoList({
 	const isSignedIn = !!session.data;
 	const subscriptionSettled = !Result.isInitial(result);
 
-	const repos = subscriptionSettled
-		? (() => {
-				const valueOption = Result.value(result);
-				return Option.isSome(valueOption)
-					? (valueOption.value as ReadonlyArray<SidebarRepo>)
-					: initialRepos;
-			})()
-		: initialRepos;
+	const repos = !isSignedIn
+		? []
+		: subscriptionSettled
+			? (() => {
+					const valueOption = Result.value(result);
+					return Option.isSome(valueOption)
+						? (valueOption.value as ReadonlyArray<SidebarRepo>)
+						: initialRepos;
+				})()
+			: initialRepos;
 
 	const grouped = useMemo(
 		() =>
@@ -90,7 +92,7 @@ export function SidebarRepoList({
 
 			{/* Repo list */}
 			<div className="py-0.5">
-				{repos.length === 0 && (
+				{isSignedIn && repos.length === 0 && (
 					<div className="px-2 py-6 text-center">
 						<p className="text-[11px] font-medium text-foreground">
 							No repos yet
