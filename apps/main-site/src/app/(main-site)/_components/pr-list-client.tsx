@@ -110,8 +110,8 @@ export function PrListClient({
 		[filteredPrs, owner, name, router],
 	);
 
-	// j — open next PR (matches GitHub issue/PR list navigation)
-	useHotkey("J", (e) => {
+	// Shift+J — open next PR from sidebar list
+	useHotkey("Shift+J", (e) => {
 		e.preventDefault();
 		if (filteredPrs.length === 0) return;
 
@@ -130,8 +130,8 @@ export function PrListClient({
 		}
 	});
 
-	// k — open previous PR (matches GitHub issue/PR list navigation)
-	useHotkey("K", (e) => {
+	// Shift+K — open previous PR from sidebar list
+	useHotkey("Shift+K", (e) => {
 		e.preventDefault();
 		if (filteredPrs.length === 0) return;
 		const nextIndex = activeIndex === -1 ? 0 : Math.max(activeIndex - 1, 0);

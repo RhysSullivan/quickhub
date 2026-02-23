@@ -11,8 +11,8 @@ import { useHotkey } from "@tanstack/react-hotkeys";
 import { useState } from "react";
 
 const PR_LIST_SHORTCUTS = [
-	{ keys: ["j"], description: "Open next pull request" },
-	{ keys: ["k"], description: "Open previous pull request" },
+	{ keys: ["shift", "j"], description: "Open next pull request" },
+	{ keys: ["shift", "k"], description: "Open previous pull request" },
 	{ keys: ["o"], description: "Open current pull request" },
 	{ keys: ["/"], description: "Focus list filter" },
 ] as const;
