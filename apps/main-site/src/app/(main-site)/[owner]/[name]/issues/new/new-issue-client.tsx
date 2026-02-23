@@ -36,6 +36,7 @@ import {
 	TabsTrigger,
 } from "@packages/ui/components/tabs";
 import { Textarea } from "@packages/ui/components/textarea";
+import { cn } from "@packages/ui/lib/utils";
 import { useGithubWrite } from "@packages/ui/rpc/github-write";
 import { useIssueTemplates } from "@packages/ui/rpc/issue-templates";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
@@ -43,6 +44,7 @@ import { Option } from "effect";
 import { useRouter } from "next/navigation";
 import { useId, useMemo, useState } from "react";
 import { MarkdownBody } from "@/components/markdown-body";
+import { getGithubLabelColorClass } from "@/lib/github-label-colors";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -216,7 +218,10 @@ function TemplateChooser({
 											<Badge
 												key={label}
 												variant="outline"
-												className="text-[9px] px-1.5 py-0"
+												className={cn(
+													"text-[9px] px-1.5 py-0",
+													getGithubLabelColorClass(label),
+												)}
 											>
 												{label}
 											</Badge>
@@ -539,8 +544,11 @@ function NewIssueLabelsPicker({
 					{selectedLabels.map((label) => (
 						<Badge
 							key={label}
-							variant="secondary"
-							className="text-[10px] gap-1 group"
+							variant="outline"
+							className={cn(
+								"text-[10px] gap-1 group",
+								getGithubLabelColorClass(label),
+							)}
 						>
 							{label}
 							<button

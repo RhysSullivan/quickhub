@@ -28,6 +28,7 @@ import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { Option } from "effect";
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getGithubLabelColorClass } from "@/lib/github-label-colors";
 import { triggerOpenSearchCommand } from "./search-command-events";
 
 // ---------------------------------------------------------------------------
@@ -678,7 +679,11 @@ function IssueRow({ issue }: { issue: DashboardIssueItem }) {
 			{issue.labelNames.length > 0 && (
 				<div className="flex shrink-0 gap-1">
 					{issue.labelNames.slice(0, 2).map((label) => (
-						<Badge key={label} variant="outline" className="text-[10px]">
+						<Badge
+							key={label}
+							variant="outline"
+							className={cn("text-[10px]", getGithubLabelColorClass(label))}
+						>
 							{label}
 						</Badge>
 					))}

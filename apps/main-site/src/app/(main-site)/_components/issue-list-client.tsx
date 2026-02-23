@@ -17,6 +17,7 @@ import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { useHotkey } from "@tanstack/react-hotkeys";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getGithubLabelColorClass } from "@/lib/github-label-colors";
 
 const PAGE_SIZE = 30;
 
@@ -237,7 +238,10 @@ export function IssueListClient({
 									<Badge
 										key={label}
 										variant="outline"
-										className="text-[9px] px-1 py-0"
+										className={cn(
+											"text-[9px] px-1 py-0",
+											getGithubLabelColorClass(label),
+										)}
 									>
 										{label}
 									</Badge>
