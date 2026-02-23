@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
-import { Atom } from "@effect-atom/atom";
+import { Atom, Registry, Result } from "@effect-atom/atom";
 import { createRpcClient, createServerRpcQuery, RpcDefectError } from "./client";
 import { createRpcFactory, makeRpcModule } from "./server";
 import { defineTable, defineSchema } from "../schema";
@@ -203,6 +203,70 @@ describe("RPC Client", () => {
 			const atom = client.list.subscription({});
 			expect(atom).toBeDefined();
 			expect(Atom.isAtom(atom)).toBe(true);
+		});
+
+		it("query can be disabled until caller is ready", () => {
+			let queryCalls = 0;
+			const service: ConvexClientService = {
+				query: () => {
+					queryCalls += 1;
+					return Effect.die("query should be disabled");
+				},
+				mutation: () => Effect.die("not implemented"),
+				action: () => Effect.die("not implemented"),
+				subscribe: () => Stream.empty,
+			};
+			const layer = Layer.succeed(ConvexClient, service);
+
+			const mockApi = { list: guestbookModule.handlers.list };
+			const client = createRpcClient<typeof guestbookModule>(
+				mockApi as never,
+				{ url: "https://test.convex.cloud", layer },
+			);
+
+			const atom = client.list.query({}, { enabled: false });
+			const registry = Registry.make();
+			const value = registry.get(atom);
+
+			expect(Result.isInitial(value)).toBe(true);
+			expect(queryCalls).toBe(0);
+
+			const unmount = registry.mount(atom);
+			expect(queryCalls).toBe(0);
+			unmount();
+			registry.dispose();
+		});
+
+		it("subscription can be disabled until caller is ready", () => {
+			let subscribeCalls = 0;
+			const service: ConvexClientService = {
+				query: () => Effect.die("not implemented"),
+				mutation: () => Effect.die("not implemented"),
+				action: () => Effect.die("not implemented"),
+				subscribe: () => {
+					subscribeCalls += 1;
+					return Stream.empty;
+				},
+			};
+			const layer = Layer.succeed(ConvexClient, service);
+
+			const mockApi = { list: guestbookModule.handlers.list };
+			const client = createRpcClient<typeof guestbookModule>(
+				mockApi as never,
+				{ url: "https://test.convex.cloud", layer },
+			);
+
+			const atom = client.list.subscription({}, { enabled: false });
+			const registry = Registry.make();
+			const value = registry.get(atom);
+
+			expect(Result.isInitial(value)).toBe(true);
+			expect(subscribeCalls).toBe(0);
+
+			const unmount = registry.mount(atom);
+			expect(subscribeCalls).toBe(0);
+			unmount();
+			registry.dispose();
 		});
 	});
 

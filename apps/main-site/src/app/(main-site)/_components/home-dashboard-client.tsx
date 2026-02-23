@@ -83,13 +83,19 @@ function useDashboardData(
 	initialData: DashboardData,
 	query: DashboardQuery,
 ): DashboardData {
+	const session = authClient.useSession();
 	const client = useProjectionQueries();
 	const dashboardAtom = useMemo(
 		() =>
-			client.getHomeDashboard.subscription({
-				ownerLogin: query.ownerLogin,
-			}),
-		[client, query.ownerLogin],
+			client.getHomeDashboard.subscription(
+				{
+					ownerLogin: query.ownerLogin,
+				},
+				{
+					enabled: !session.isPending,
+				},
+			),
+		[client, query.ownerLogin, session.isPending],
 	);
 	return useSubscriptionWithInitial(dashboardAtom, initialData);
 }

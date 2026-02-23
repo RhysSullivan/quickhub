@@ -39,8 +39,11 @@ export function SidebarRepoList({
 	const session = authClient.useSession();
 	const client = useProjectionQueries();
 	const reposAtom = useMemo(
-		() => client.listRepos.subscription(EmptyPayload),
-		[client],
+		() =>
+			client.listRepos.subscription(EmptyPayload, {
+				enabled: !session.isPending,
+			}),
+		[client, session.isPending],
 	);
 	const result = useAtomValue(reposAtom);
 

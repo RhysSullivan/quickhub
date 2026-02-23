@@ -25,6 +25,7 @@ import {
 	Search,
 } from "@packages/ui/components/icons";
 import { Skeleton } from "@packages/ui/components/skeleton";
+import { authClient } from "@packages/ui/lib/auth-client";
 import { cn } from "@packages/ui/lib/utils";
 import { useProjectionQueries } from "@packages/ui/rpc/projection-queries";
 import { useHotkey } from "@tanstack/react-hotkeys";
@@ -673,10 +674,17 @@ function GlobalWorkResults({
 	query: string;
 	onSelect: (target: NavigationTarget) => void;
 }) {
+	const session = authClient.useSession();
 	const client = useProjectionQueries();
 	const dashboardAtom = useMemo(
-		() => client.getHomeDashboard.subscription({}),
-		[client],
+		() =>
+			client.getHomeDashboard.subscription(
+				{},
+				{
+					enabled: !session.isPending,
+				},
+			),
+		[client, session.isPending],
 	);
 	const result = useAtomValue(dashboardAtom);
 
@@ -774,8 +782,18 @@ function RepoResults({
 	heading?: string;
 	limit?: number;
 }) {
+	const session = authClient.useSession();
 	const client = useProjectionQueries();
-	const reposAtom = useMemo(() => client.listRepos.subscription({}), [client]);
+	const reposAtom = useMemo(
+		() =>
+			client.listRepos.subscription(
+				{},
+				{
+					enabled: !session.isPending,
+				},
+			),
+		[client, session.isPending],
+	);
 	const result = useAtomValue(reposAtom);
 
 	if (Result.isInitial(result)) {
