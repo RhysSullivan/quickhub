@@ -119,6 +119,10 @@ const decodeGitHubTokenRefreshResponse = Schema.decodeUnknownEither(
 
 const ACCESS_TOKEN_REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
+type TokenResolutionOptions = {
+	readonly forceRefresh?: boolean;
+};
+
 const getOAuthClientCredentials = (providerId: string) => {
 	if (providerId === "github") {
 		const clientId = process.env.GITHUB_CLIENT_ID ?? "";
@@ -286,24 +290,35 @@ const resolveAccountAccessToken = (
 		Schema.Schema.Type<typeof OAuthAccountSchema>,
 		NoGitHubTokenError
 	>,
+	options?: TokenResolutionOptions,
 ): Effect.Effect<string, NoGitHubTokenError> =>
 	Effect.gen(function* () {
 		const accessToken = account.accessToken ?? null;
-		if (accessToken === null) {
-			return yield* new NoGitHubTokenError({
-				reason: `No ${providerId} OAuth access token is stored for userId ${account.userId}`,
-			});
-		}
+		const forceRefresh = options?.forceRefresh === true;
 
 		const accessTokenExpiresAt = account.accessTokenExpiresAt ?? null;
-		if (!isTokenInRefreshWindow(accessTokenExpiresAt)) {
+		if (
+			!forceRefresh &&
+			accessToken !== null &&
+			!isTokenInRefreshWindow(accessTokenExpiresAt)
+		) {
 			return accessToken;
 		}
 
 		const refreshToken = account.refreshToken ?? null;
 		if (refreshToken === null) {
-			if (!isTokenExpired(accessTokenExpiresAt)) {
+			if (
+				!forceRefresh &&
+				accessToken !== null &&
+				!isTokenExpired(accessTokenExpiresAt)
+			) {
 				return accessToken;
+			}
+
+			if (accessToken === null) {
+				return yield* new NoGitHubTokenError({
+					reason: `No ${providerId} OAuth access token is stored for userId ${account.userId}`,
+				});
 			}
 
 			return yield* new NoGitHubTokenError({
@@ -317,7 +332,11 @@ const resolveAccountAccessToken = (
 		).pipe(Effect.either);
 
 		if (Either.isLeft(refreshedEither)) {
-			if (!isTokenExpired(accessTokenExpiresAt)) {
+			if (
+				!forceRefresh &&
+				accessToken !== null &&
+				!isTokenExpired(accessTokenExpiresAt)
+			) {
 				return accessToken;
 			}
 
@@ -401,6 +420,7 @@ const lookupTokenViaRunQuery = (
 	runMutation: RunMutationFn,
 	providerId: string,
 	userId: string,
+	options?: TokenResolutionOptions,
 ): Effect.Effect<string, NoGitHubTokenError> =>
 	Effect.gen(function* () {
 		const account = yield* Effect.promise(() =>
@@ -451,6 +471,7 @@ const lookupTokenViaRunQuery = (
 					);
 					return yield* decodeAccount(latestAccount, providerId, userId);
 				}),
+			options,
 		);
 	});
 
@@ -488,8 +509,9 @@ export const lookupGitHubTokenByUserId = (
 	runQuery: RunQueryFn,
 	runMutation: RunMutationFn,
 	userId: string,
+	options?: TokenResolutionOptions,
 ): Effect.Effect<string, NoGitHubTokenError> =>
-	lookupTokenViaRunQuery(runQuery, runMutation, "github", userId);
+	lookupTokenViaRunQuery(runQuery, runMutation, "github", userId, options);
 
 // ---------------------------------------------------------------------------
 // 3. Look up token by Better Auth user ID (Confect)
@@ -499,6 +521,7 @@ export const lookupGitHubTokenByUserIdConfect = (
 	runQuery: ConfectFindOneRunQuery,
 	runMutation: ConfectUpdateOneRunMutation,
 	userId: string,
+	options?: TokenResolutionOptions,
 ): Effect.Effect<string, NoGitHubTokenError> =>
 	Effect.gen(function* () {
 		const account = yield* runQuery(components.betterAuth.adapter.findOne, {
@@ -546,6 +569,7 @@ export const lookupGitHubTokenByUserIdConfect = (
 					);
 					return yield* decodeAccount(latestAccount, "github", userId);
 				}),
+			options,
 		);
 	});
 
@@ -558,6 +582,7 @@ export const lookupTokenByProviderConfect = (
 	runMutation: ConfectUpdateOneRunMutation,
 	providerId: string,
 	userId: string,
+	options?: TokenResolutionOptions,
 ): Effect.Effect<string, NoGitHubTokenError> =>
 	Effect.gen(function* () {
 		const account = yield* runQuery(components.betterAuth.adapter.findOne, {
@@ -605,6 +630,7 @@ export const lookupTokenByProviderConfect = (
 					);
 					return yield* decodeAccount(latestAccount, providerId, userId);
 				}),
+			options,
 		);
 	});
 

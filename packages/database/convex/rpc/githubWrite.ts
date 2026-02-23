@@ -182,6 +182,50 @@ const ensureWriteSucceeded = (result: {
 				message: result.errorMessage ?? "GitHub write failed",
 			});
 
+const executeWithAuthRefreshRetry = <
+	A extends {
+		success: boolean;
+		errorStatus: number | null;
+		errorMessage: string | null;
+	},
+>(
+	ctx: ConfectActionCtx,
+	actingUserId: string,
+	execute: (auth: {
+		token: string;
+		gh: { client: GitHubClient };
+	}) => Effect.Effect<A>,
+): Effect.Effect<A, NotAuthenticated> =>
+	Effect.gen(function* () {
+		const initialAuth = yield* resolveWriteTokenAndClient(ctx, actingUserId);
+		const initialResult = yield* execute(initialAuth);
+
+		if (initialResult.errorStatus !== 401) {
+			return initialResult;
+		}
+
+		const refreshedToken = yield* lookupGitHubTokenByUserIdConfect(
+			(query, params) => ctx.runQuery(query, params),
+			(mutation, params) => ctx.runMutation(mutation, params),
+			actingUserId,
+			{ forceRefresh: true },
+		).pipe(
+			Effect.catchAll(
+				(error) =>
+					new NotAuthenticated({
+						reason: error.reason,
+					}),
+			),
+		);
+
+		const refreshedGh = yield* Effect.provide(
+			GitHubApiClient,
+			GitHubApiClient.fromToken(refreshedToken),
+		);
+
+		return yield* execute({ token: refreshedToken, gh: refreshedGh });
+	});
+
 // ---------------------------------------------------------------------------
 // 1. Public actions — execute writes immediately against GitHub
 // ---------------------------------------------------------------------------
@@ -209,13 +253,17 @@ createIssueDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const { gh } = yield* resolveWriteTokenAndClient(ctx, actingUserId);
 
-		const result = yield* executeCreateIssue(gh, args.ownerLogin, args.name, {
-			title: args.title,
-			body: args.body ?? undefined,
-			labels: args.labels ?? [],
-		});
+		const result = yield* executeWithAuthRefreshRetry(
+			ctx,
+			actingUserId,
+			({ gh }) =>
+				executeCreateIssue(gh, args.ownerLogin, args.name, {
+					title: args.title,
+					body: args.body ?? undefined,
+					labels: args.labels ?? [],
+				}),
+		);
 		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
@@ -244,12 +292,16 @@ createCommentDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const { gh } = yield* resolveWriteTokenAndClient(ctx, actingUserId);
 
-		const result = yield* executeCreateComment(gh, args.ownerLogin, args.name, {
-			number: args.number,
-			body: args.body,
-		});
+		const result = yield* executeWithAuthRefreshRetry(
+			ctx,
+			actingUserId,
+			({ gh }) =>
+				executeCreateComment(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					body: args.body,
+				}),
+		);
 		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
@@ -278,16 +330,15 @@ updateIssueStateDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const { gh } = yield* resolveWriteTokenAndClient(ctx, actingUserId);
 
-		const result = yield* executeUpdateIssueState(
-			gh,
-			args.ownerLogin,
-			args.name,
-			{
-				number: args.number,
-				state: args.state,
-			},
+		const result = yield* executeWithAuthRefreshRetry(
+			ctx,
+			actingUserId,
+			({ gh }) =>
+				executeUpdateIssueState(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					state: args.state,
+				}),
 		);
 		yield* ensureWriteSucceeded(result);
 
@@ -319,18 +370,17 @@ mergePullRequestDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const { gh } = yield* resolveWriteTokenAndClient(ctx, actingUserId);
 
-		const result = yield* executeMergePullRequest(
-			gh,
-			args.ownerLogin,
-			args.name,
-			{
-				number: args.number,
-				mergeMethod: args.mergeMethod ?? undefined,
-				commitTitle: args.commitTitle ?? undefined,
-				commitMessage: args.commitMessage ?? undefined,
-			},
+		const result = yield* executeWithAuthRefreshRetry(
+			ctx,
+			actingUserId,
+			({ gh }) =>
+				executeMergePullRequest(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					mergeMethod: args.mergeMethod ?? undefined,
+					commitTitle: args.commitTitle ?? undefined,
+					commitMessage: args.commitMessage ?? undefined,
+				}),
 		);
 		yield* ensureWriteSucceeded(result);
 
@@ -360,16 +410,20 @@ updatePullRequestBranchDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const { token } = yield* resolveWriteTokenAndClient(ctx, actingUserId);
 
-		const result = yield* executeUpdatePullRequestBranch(
-			args.ownerLogin,
-			args.name,
-			{
-				number: args.number,
-				expectedHeadSha: args.expectedHeadSha ?? undefined,
-			},
-			token,
+		const result = yield* executeWithAuthRefreshRetry(
+			ctx,
+			actingUserId,
+			({ token }) =>
+				executeUpdatePullRequestBranch(
+					args.ownerLogin,
+					args.name,
+					{
+						number: args.number,
+						expectedHeadSha: args.expectedHeadSha ?? undefined,
+					},
+					token,
+				),
 		);
 		yield* ensureWriteSucceeded(result);
 
@@ -400,17 +454,16 @@ submitPrReviewDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const { gh } = yield* resolveWriteTokenAndClient(ctx, actingUserId);
 
-		const result = yield* executeSubmitPrReview(
-			gh,
-			args.ownerLogin,
-			args.name,
-			{
-				number: args.number,
-				event: args.event,
-				body: args.body ?? undefined,
-			},
+		const result = yield* executeWithAuthRefreshRetry(
+			ctx,
+			actingUserId,
+			({ gh }) =>
+				executeSubmitPrReview(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					event: args.event,
+					body: args.body ?? undefined,
+				}),
 		);
 		yield* ensureWriteSucceeded(result);
 
@@ -441,13 +494,17 @@ updateLabelsDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const { gh } = yield* resolveWriteTokenAndClient(ctx, actingUserId);
 
-		const result = yield* executeUpdateLabels(gh, args.ownerLogin, args.name, {
-			number: args.number,
-			labelsToAdd: args.labelsToAdd,
-			labelsToRemove: args.labelsToRemove,
-		});
+		const result = yield* executeWithAuthRefreshRetry(
+			ctx,
+			actingUserId,
+			({ gh }) =>
+				executeUpdateLabels(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					labelsToAdd: args.labelsToAdd,
+					labelsToRemove: args.labelsToRemove,
+				}),
+		);
 		yield* ensureWriteSucceeded(result);
 
 		return { correlationId: args.correlationId };
@@ -477,17 +534,16 @@ updateAssigneesDef.implement((args) =>
 	Effect.gen(function* () {
 		const ctx = yield* ConfectActionCtx;
 		const actingUserId = yield* getActingUserId(ctx);
-		const { gh } = yield* resolveWriteTokenAndClient(ctx, actingUserId);
 
-		const result = yield* executeUpdateAssignees(
-			gh,
-			args.ownerLogin,
-			args.name,
-			{
-				number: args.number,
-				assigneesToAdd: args.assigneesToAdd,
-				assigneesToRemove: args.assigneesToRemove,
-			},
+		const result = yield* executeWithAuthRefreshRetry(
+			ctx,
+			actingUserId,
+			({ gh }) =>
+				executeUpdateAssignees(gh, args.ownerLogin, args.name, {
+					number: args.number,
+					assigneesToAdd: args.assigneesToAdd,
+					assigneesToRemove: args.assigneesToRemove,
+				}),
 		);
 		yield* ensureWriteSucceeded(result);
 
